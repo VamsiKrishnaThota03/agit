@@ -155,6 +155,21 @@ A tool whose whole value proposition is "you will still be able to read this in
 two years" has no business shipping a dependency tree that will not resolve in
 two years. Standard library plus `git`. Installation is a clone.
 
+## Why the UI is a file, not a server
+
+`agit dashboard` writes one static HTML file: the ledger is read once,
+serialised into the page as JSON, and rendered by inline vanilla JavaScript.
+Nothing listens on a port, so there is no bind address to get wrong, no auth
+question to answer, and no reason for a reviewer to trust an open socket on
+their laptop. It also means the artefact survives: the file can be committed,
+emailed, attached to a ticket or opened on an air-gapped machine years later.
+
+Everything a model produced -- rationales, diffs, tool output, file contents --
+is untrusted text. It only ever reaches the DOM through `textContent`, never
+`innerHTML`, and the embedded JSON has `<` escaped to `\u003c`, so a model that
+writes `</script>` into a rationale cannot close the data block. There is a test
+for exactly that.
+
 ## Testing strategy
 
 The agent loop is the hard part to test, because it normally needs a model. The

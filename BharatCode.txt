@@ -31,6 +31,8 @@ agent transcript can:
   agit goto / agit undo    move the workspace back in time, losing nothing
   agit replay [--live]     re-drive a run from cache for free, or detect
                            where today's model answer diverges from the record
+  agit dashboard           every run in one static HTML page (timeline, blame,
+                           spend), no server and no network
   agit report              one self-contained HTML audit trail for a PR
   agit run --verify "..."  a definition of done the agent cannot talk past
 
@@ -70,7 +72,7 @@ BUILD, TEST, SIZE
 -----------------
   Language:      Python 3.9+
   Dependencies:  none (standard library and git only)
-  Tests:         python3 -m unittest discover -s tests -t .   (87 tests, offline)
+  Tests:         python3 -m unittest discover -s tests -t .   (97 tests, offline)
   CI:            GitHub Actions, Linux and macOS, Python 3.9-3.13
 
 
@@ -88,6 +90,9 @@ WHAT WAS BUILT HERE, SPECIFICALLY
     local paths out of everything sent to the model
   * an offline deterministic provider so the demo and the whole test suite run
     with no API key and no network
+  * a static-file UI (agit dashboard) that reads the ledger and renders runs,
+    fork lineage, clickable per-line blame with the reasoning, and token spend
+    -- deep-linkable, with no server listening anywhere
 
 
 NO SECRETS, TOKENS, PRIVATE LINKS OR PRIVATE USER DATA ARE PRESENT IN THIS

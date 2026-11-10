@@ -74,6 +74,23 @@ class TestCliRun(CliCase):
         self.assertIn("minus sign", html)
         self.assertNotIn("<script", html.lower())
 
+    def test_dashboard_is_generated(self):
+        script = self.script_file(FIX_STEPS)
+        run_cli(["run", "fix add()", "--provider", "script", "--script", script, "--yes"])
+        code, out = run_cli(["dashboard", "-o", "d.html"])
+        self.assertEqual(code, 0, out)
+        self.assertTrue(os.path.exists(self.path("d.html")))
+        with open(self.path("d.html"), encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertIn("agit</b> dashboard", html)
+        self.assertIn("minus sign", html)
+
+    def test_dashboard_without_runs_fails_cleanly(self):
+        run_cli(["init"])
+        code, out = run_cli(["dashboard"])
+        self.assertEqual(code, 1)
+        self.assertIn("no runs", out)
+
     def test_run_without_verify_is_done_not_verified(self):
         script = self.script_file(FIX_STEPS)
         code, out = run_cli(["run", "fix add()", "--provider", "script",

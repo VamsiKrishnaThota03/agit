@@ -6,7 +6,7 @@ Every run can be forked, rewound and replayed.</p>
 
 <p align="center">
 <a href="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml/badge.svg"></a>
-<img alt="tests" src="https://img.shields.io/badge/tests-87%20offline-3ddc97">
+<img alt="tests" src="https://img.shields.io/badge/tests-97%20offline-3ddc97">
 <img alt="dependencies" src="https://img.shields.io/badge/dependencies-0-ff9933">
 <img alt="python" src="https://img.shields.io/badge/python-3.9%2B-58a6ff">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-b48ead">
@@ -186,15 +186,47 @@ paths never go into the prompt**, and timings, pids and addresses are masked
 out of the cassette key, so the same run reproduces in a different directory on
 a different machine.
 
-### 5. `agit report` — one HTML file to attach to the PR
+### 5. `agit dashboard` — the whole ledger, in a browser
+
+```bash
+agit dashboard --open
+```
+
+One static HTML file. No server, nothing listening on a port, no CDN, no build
+step — you double-click it, and it works offline and inside an air-gapped
+network.
+
+<img alt="agit dashboard, blame view" src="docs/dashboard-blame.png" width="900">
+
+Left: every run, with forks nested under the run they branched from, and the
+agent's share of each file it touched. Right, three tabs:
+
+- **timeline** — step cards with the rationale, expandable diffs, the tool
+  output the model saw, and the verify result
+- **blame** — the file with agent-written lines highlighted; click any line and
+  the pinned panel above shows which step wrote it and why
+- **spend** — tokens per step and the tool mix, so you can see where a run got
+  expensive
+
+<img alt="agit dashboard, spend view" src="docs/dashboard-spend.png" width="900">
+
+Every view is deep-linkable, so "why is line 24 like this?" is a URL you can
+send someone:
+
+```
+agit-dashboard.html#run=1110-114540-f42f-demo&tab=blame&file=csvkit.py&line=24
+```
+
+### 6. `agit report` — one HTML file to attach to the PR
 
 ```bash
 agit report @last -o run.html
 ```
 
-Self-contained, no JavaScript, no CDN: the task, every step with its rationale,
-every diff, every tool result, the verify output, the raw model I/O, and the
-ledger graph. The thing you hand a reviewer, an auditor, or your future self.
+The same evidence for a single run, with no JavaScript at all: the task, every
+step with its rationale, every diff, every tool result, the verify output, the
+raw model I/O, and the ledger graph. The thing you hand a reviewer, an auditor,
+or your future self.
 
 ## The verify gate
 
@@ -310,7 +342,8 @@ the tools you already have. That is the whole design.
 | `agit diff <runA> <runB>` | compare the workspaces two runs produced |
 | `agit goto <step>` / `agit undo [n]` | move the workspace back in time |
 | `agit replay [run]` | re-drive a run from the cassette, or `--live` for divergence |
-| `agit report [run]` | self-contained HTML audit trail |
+| `agit dashboard --open` | every run in one static HTML page: timeline, blame, spend |
+| `agit report [run]` | self-contained HTML audit trail for one run |
 | `agit stats` | tokens, tool mix, and agent-vs-human line share per file |
 | `agit doctor` | what is configured, what is missing, free ways to fix it |
 | `agit demo` | the whole feature set offline in 20 seconds |
@@ -333,7 +366,7 @@ Honesty is cheaper than a disappointed issue:
 
 ## Tests
 
-87 tests, standard library only, no network, no API key:
+97 tests, standard library only, no network, no API key:
 
 ```bash
 python3 -m unittest discover -s tests -t .

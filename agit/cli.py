@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from . import blame as blame_mod
 from . import config as config_mod
-from . import gitutil, report, snapshot, tools
+from . import dashboard, gitutil, report, snapshot, tools
 from .agent import Agent, RunResult
 from .config import AGIT_DIR, PRESETS, Config
 from .ledger import Ledger, LedgerError, RunInfo, StepInfo
@@ -31,6 +31,7 @@ EPILOG = """examples
   agit diff @last run/1110-ab12             compare two attempts
   agit replay @last                         re-drive the run with no network
   agit report @last -o run.html             shareable audit trail
+  agit dashboard --open                     every run, visually, in a browser
 
 the ledger is real git:
   git -C .agit/ledger log --graph --all --oneline
@@ -758,6 +759,38 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    console = Console()
+    root = find_root()
+    ledger = Ledger(root).require()
+    if not ledger.runs():
+        console.fail("no runs to show yet. Try `agit demo` or `agit run \"<task>\"`.")
+        return 1
+    out = args.output or os.path.join(root, "agit-dashboard.html")
+    path = dashboard.build(ledger, out, include_io=args.io)
+    size = os.path.getsize(path)
+    console.write("")
+    console.ok("wrote %s (%.0f KB)" % (short_path(path), size / 1024.0))
+    console.note("every run in the ledger: timeline, blame, spend. One static file,")
+    console.note("no server and no network, so it opens by double-clicking.")
+    if args.open:
+        _open_in_browser(path, console)
+    else:
+        console.note("open it with: agit dashboard --open")
+    return 0
+
+
+def _open_in_browser(path: str, console: Console) -> None:
+    import webbrowser
+    try:
+        if webbrowser.open("file://" + path):
+            console.ok("opened in your browser")
+            return
+    except Exception:
+        pass
+    console.note("could not launch a browser; open the file manually")
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     console = Console()
     root = find_root()
@@ -847,6 +880,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     console.note("  agit blame csvkit.py           human lines vs agent lines")
     console.note("  agit why csvkit.py 24          the reasoning behind one line")
     console.note("  agit replay @last              re-drive it with zero network calls")
+    console.note("  agit dashboard --open          every run, visually, in a browser")
     console.note("  agit report @last -o run.html  shareable audit trail")
     console.note("  agit fork 4 'use the stdlib csv module instead' \\")
     console.note("       --provider script --script %s --yes" % short_path(alt_script))
@@ -1022,6 +1056,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output", default="")
     p.add_argument("--no-io", action="store_true", help="leave raw model I/O out")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("dashboard", help="one static HTML page for every run in the ledger")
+    p.add_argument("-o", "--output", default="")
+    p.add_argument("--open", action="store_true", help="open it in your browser")
+    p.add_argument("--io", action="store_true", help="embed raw model responses too")
+    p.set_defaults(func=cmd_dashboard)
 
     p = sub.add_parser("stats", help="where the tokens and the lines went")
     p.add_argument("--run", default="")

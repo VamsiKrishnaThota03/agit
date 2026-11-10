@@ -55,6 +55,15 @@ jobs:
           grep -q "step 05" blame.txt
           grep -q "human" blame.txt
 
+      - name: dashboard is produced
+        working-directory: /tmp/agit-ci-demo
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m agit dashboard -o dashboard.html
+          test -s dashboard.html
+          grep -q "agit</b> dashboard" dashboard.html
+
       - name: html report is produced
         working-directory: /tmp/agit-ci-demo
         env:
@@ -68,7 +77,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agit-run-report-${{ matrix.os }}-py${{ matrix.python }}
-          path: /tmp/agit-ci-demo/run.html
+          path: |
+            /tmp/agit-ci-demo/run.html
+            /tmp/agit-ci-demo/dashboard.html
           if-no-files-found: ignore
 
   package:
