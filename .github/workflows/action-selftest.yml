@@ -1,0 +1,59 @@
+name: action selftest
+
+# Proves the composite action in action.yml actually works on a runner:
+# install, doctor, run, stats --json, dashboard, report, outputs, artifact.
+# Uses the offline scripted planner, so it needs no API key and no spend.
+
+on:
+  push:
+    paths:
+      - "action.yml"
+      - ".github/workflows/action-selftest.yml"
+      - "agit/**"
+  pull_request:
+    paths:
+      - "action.yml"
+      - "agit/**"
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "task for the agent"
+        required: false
+        default: "Survey this workspace and report what you find."
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: create a scratch workspace for the agent
+        run: |
+          python3 -m agit demo workspace --fast
+          ls workspace
+
+      - name: run the action against it
+        id: agit
+        uses: ./
+        with:
+          task: ${{ inputs.task || 'Survey this workspace and report what you find.' }}
+          provider: script
+          working-directory: workspace
+          max-steps: "6"
+          fail-on-unverified: "false"
+          agit-ref: ${{ github.sha }}
+
+      - name: the action must emit usable outputs
+        env:
+          RUN_ID: ${{ steps.agit.outputs.run-id }}
+          VERIFIED: ${{ steps.agit.outputs.verified }}
+          SHARE: ${{ steps.agit.outputs.agent-share }}
+          STATS: ${{ steps.agit.outputs.stats-json }}
+        run: |
+          set -u
+          echo "run-id=$RUN_ID verified=$VERIFIED share=$SHARE"
+          test -n "$RUN_ID"
+          test -s "$STATS"
+          python3 -c "import json,os,sys; d=json.load(open(os.environ['STATS'])); assert d['run'], d; print('stats ok:', d['run'], d['steps'], 'steps')"
+          test -s "$RUNNER_TEMP/agit-dashboard.html"
+          test -s "$RUNNER_TEMP/agit-run.html"

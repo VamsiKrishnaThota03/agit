@@ -6,7 +6,7 @@ Every run can be forked, rewound and replayed.</p>
 
 <p align="center">
 <a href="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml/badge.svg"></a>
-<img alt="tests" src="https://img.shields.io/badge/tests-103%20offline-3ddc97">
+<img alt="tests" src="https://img.shields.io/badge/tests-134%20offline-3ddc97">
 <img alt="dependencies" src="https://img.shields.io/badge/dependencies-0-ff9933">
 <img alt="python" src="https://img.shields.io/badge/python-3.9%2B-58a6ff">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-b48ead">
@@ -247,11 +247,21 @@ and `agit run` exits non-zero unless the run ended **VERIFIED** — so it drops
 straight into CI:
 
 ```yaml
-- run: agit run "${{ github.event.issue.title }}" --verify "pytest -q" --yes
-- run: agit report @last -o run.html
-- uses: actions/upload-artifact@v4
-  with: { name: agent-run, path: run.html }
+- uses: VamsiKrishnaThota03/agit@main
+  with:
+    task: "add retry with exponential backoff to fetch()"
+    verify: "pytest -q"
+    comment: "true"        # posts the provenance summary on the PR
+    provider: bharatcode
+    base-url: ${{ secrets.BHARATCODE_BASE_URL }}
+    api-key: ${{ secrets.BHARATCODE_API_KEY }}
 ```
+
+The job fails unless your verify command passes, so an agent cannot merge its
+own optimism. Every run uploads the HTML dashboard as an artifact, and
+`agit stats --json` gives CI the numbers without scraping terminal output.
+Full recipes — issue-triggered fixes, PR provenance comments, running with no
+key at all — are in **[docs/github-action.md](docs/github-action.md)**.
 
 ## Install
 
@@ -317,6 +327,9 @@ not be advisory:
   pushes, never rewrites. The ledger is a separate repository.
 - **`replay` runs into a scratch directory** and will only re-run shell
   commands that the recorded run already ran.
+- **Rewinding will not eat your work.** `agit undo`, `goto` and `fork` compare
+  the workspace against the ledger first and refuse to overwrite files you
+  changed yourself, unless you pass `--force`.
 
 ## It really is git
 
@@ -344,11 +357,13 @@ the tools you already have. That is the whole design.
 | `agit why <file> <line>` | the rationale, model, tool and prompt behind one line |
 | `agit fork <step> "<task>"` | rewind and try a different approach on a new branch |
 | `agit diff <runA> <runB>` | compare the workspaces two runs produced |
-| `agit goto <step>` / `agit undo [n]` | move the workspace back in time |
+| `agit continue [run]` | resume a run you interrupted, on the same branch |
+| `agit goto <step>` / `agit undo [n]` | move the workspace back in time (refuses to clobber your own edits) |
 | `agit replay [run]` | re-drive a run from the cassette, or `--live` for divergence |
 | `agit dashboard --open` | every run in one static HTML page: timeline, blame, spend |
 | `agit report [run]` | self-contained HTML audit trail for one run |
-| `agit stats` | tokens, tool mix, and agent-vs-human line share per file |
+| `agit stats [--json]` | tokens, money, tool mix, and agent-vs-human line share per file |
+| `agit price --in X --out Y` | your token rate, so spend shows in money |
 | `agit doctor` | what is configured, what is missing, free ways to fix it |
 | `agit demo` | the whole feature set offline in 20 seconds |
 
@@ -370,7 +385,7 @@ Honesty is cheaper than a disappointed issue:
 
 ## Tests
 
-103 tests, standard library only, no network, no API key:
+134 tests, standard library only, no network, no API key:
 
 ```bash
 python3 -m unittest discover -s tests -t .

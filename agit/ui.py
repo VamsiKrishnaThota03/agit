@@ -4,7 +4,8 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-from typing import Iterable, List, Optional, Sequence, Tuple
+import time
+from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 
 def _supports_color(stream) -> bool:
@@ -204,6 +205,67 @@ class Console:
                 self.write(indent + t.dim(line[: self.width]))
         if len(lines) > limit:
             self.write(indent + t.dim("... %d more diff lines" % (len(lines) - limit)))
+
+
+class Spinner:
+    """A live 'still working' indicator for the seconds a model takes to answer.
+
+    No-op when stdout is not a terminal, so logs and CI output stay clean.
+    """
+    FRAMES_UNICODE = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    FRAMES_ASCII = "|/-\\"
+
+    def __init__(self, console: "Console"):
+        self.console = console
+        self._thread: Optional[Any] = None
+        self._stop: Optional[Any] = None
+        self.enabled = (not console.quiet
+                        and bool(getattr(console.stream, "isatty", lambda: False)())
+                        and not os.environ.get("AGIT_NO_SPINNER"))
+
+    def start(self, label: str) -> None:
+        if not self.enabled or self._thread is not None:
+            return
+        import threading
+
+        theme = self.console.theme
+        frames = self.FRAMES_UNICODE if theme.unicode else self.FRAMES_ASCII
+        stream = self.console.stream
+        self._stop = threading.Event()
+        stop = self._stop
+
+        def spin() -> None:
+            started = time.time()
+            i = 0
+            while not stop.is_set():
+                elapsed = time.time() - started
+                stream.write("\r  %s %s %s" % (
+                    theme.saffron(frames[i % len(frames)]),
+                    theme.dim(label),
+                    theme.dim("%.1fs" % elapsed)))
+                stream.flush()
+                i += 1
+                stop.wait(0.12)
+            stream.write("\r\x1b[2K" if theme.color else "\r" + " " * 60 + "\r")
+            stream.flush()
+
+        self._thread = threading.Thread(target=spin, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        if self._stop is not None:
+            self._stop.set()
+        self._thread.join(timeout=1.0)
+        self._thread = None
+        self._stop = None
+
+    def __enter__(self) -> "Spinner":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.stop()
 
 
 def _visible(text: str) -> str:

@@ -1,0 +1,250 @@
+name: "agit — auditable AI agent run"
+description: >
+  Run an AI coding agent on a task, gate it on your own test command, and leave
+  behind a git ledger: which step wrote which line, and why. Uploads an HTML
+  dashboard and can comment the provenance summary on a pull request.
+author: "Vamsi Krishna Thota"
+branding:
+  icon: git-commit
+  color: orange
+
+inputs:
+  task:
+    description: "What the agent should do. Required."
+    required: true
+  verify:
+    description: >
+      Command that must exit 0 for the run to count as VERIFIED, e.g. `pytest -q`.
+      Strongly recommended: without it the agent grades its own homework.
+    required: false
+    default: ""
+  provider:
+    description: "bharatcode | ollama | groq | openrouter | gemini | openai-compatible"
+    required: false
+    default: "bharatcode"
+  model:
+    description: "Model name. Defaults to the provider's default."
+    required: false
+    default: ""
+  base-url:
+    description: "API base URL ending in /v1."
+    required: false
+    default: ""
+  api-key:
+    description: "API key. Pass a secret, never a literal."
+    required: false
+    default: ""
+  max-steps:
+    description: "Hard ceiling on agent steps."
+    required: false
+    default: "24"
+  budget-tokens:
+    description: "Hard ceiling on tokens for the run."
+    required: false
+    default: "250000"
+  working-directory:
+    description: "Directory the agent may edit."
+    required: false
+    default: "."
+  comment:
+    description: >
+      Comment the result and provenance summary on the pull request. Needs
+      `permissions: pull-requests: write`.
+    required: false
+    default: "false"
+  fail-on-unverified:
+    description: "Fail the job when a verify command was given and did not pass."
+    required: false
+    default: "true"
+  agit-ref:
+    description: "Git ref of agit to install."
+    required: false
+    default: "main"
+
+outputs:
+  run-id:
+    description: "The agit run id, for later agit commands."
+    value: ${{ steps.agent.outputs.run-id }}
+  verified:
+    description: "true when the verify command passed."
+    value: ${{ steps.agent.outputs.verified }}
+  agent-share:
+    description: "Percentage of the touched lines written by the agent."
+    value: ${{ steps.agent.outputs.agent-share }}
+  summary:
+    description: "The agent's own summary of what it changed."
+    value: ${{ steps.agent.outputs.summary }}
+  stats-json:
+    description: "Path to the full machine-readable stats for the run."
+    value: ${{ steps.agent.outputs.stats-json }}
+
+runs:
+  using: composite
+  steps:
+    - name: set up python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    # Note on quoting throughout this action: every input reaches bash as an
+    # environment variable, never as ${{ }} inside a script body. A task string
+    # taken from an issue title is untrusted text, and interpolating it into a
+    # shell line would be a command-injection hole.
+    - name: install agit
+      shell: bash
+      env:
+        AGIT_REF: ${{ inputs.agit-ref }}
+      run: pip install --quiet "git+https://github.com/VamsiKrishnaThota03/agit@${AGIT_REF}"
+
+    - name: check model access
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AGIT_PROVIDER: ${{ inputs.provider }}
+        AGIT_BASE_URL: ${{ inputs.base-url }}
+        AGIT_API_KEY: ${{ inputs.api-key }}
+        AGIT_MODEL: ${{ inputs.model }}
+      run: agit doctor
+
+    - name: run the agent
+      id: agent
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AGIT_PROVIDER: ${{ inputs.provider }}
+        AGIT_BASE_URL: ${{ inputs.base-url }}
+        AGIT_API_KEY: ${{ inputs.api-key }}
+        AGIT_MODEL: ${{ inputs.model }}
+        AGIT_NO_SPINNER: "1"
+        IN_TASK: ${{ inputs.task }}
+        IN_VERIFY: ${{ inputs.verify }}
+        IN_MAX_STEPS: ${{ inputs.max-steps }}
+        IN_BUDGET: ${{ inputs.budget-tokens }}
+        IN_FAIL_UNVERIFIED: ${{ inputs.fail-on-unverified }}
+      run: |
+        set -uo pipefail
+        log="$RUNNER_TEMP/agit-run.log"
+        stats="$RUNNER_TEMP/agit-stats.json"
+
+        args=(--max-steps "$IN_MAX_STEPS" --budget-tokens "$IN_BUDGET" --yes)
+        if [ -n "$IN_VERIFY" ]; then
+          args+=(--verify "$IN_VERIFY")
+        fi
+
+        agit run "$IN_TASK" "${args[@]}" 2>&1 | tee "$log"
+        run_status=${PIPESTATUS[0]}
+
+        agit stats --json > "$stats" || echo '{}' > "$stats"
+        agit dashboard -o "$RUNNER_TEMP/agit-dashboard.html" || true
+        agit report @last -o "$RUNNER_TEMP/agit-run.html" || true
+
+        python3 - "$stats" <<'PY' >> "$GITHUB_OUTPUT"
+        import json, os, sys
+        path = sys.argv[1]
+        stats = json.load(open(path)) if os.path.getsize(path) else {}
+        share = stats.get("agent_share")
+        out = {
+            "run-id": stats.get("run", ""),
+            "verified": "true" if stats.get("verified") is True else "false",
+            "agent-share": ("%s%%" % share) if share is not None else "n/a",
+            # One line: GITHUB_OUTPUT is line-oriented.
+            "summary": " ".join(str(stats.get("summary", "")).split())[:900],
+            "stats-json": path,
+        }
+        for key, value in out.items():
+            print("%s=%s" % (key, value))
+        PY
+
+        {
+          echo "### agit run \`$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("run",""))' "$stats")\`"
+          echo
+          if [ -n "$IN_VERIFY" ]; then
+            if python3 -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1])).get("verified") is True else 1)' "$stats"; then
+              echo "✅ **VERIFIED** — the verify command passed."
+            else
+              echo "❌ **NOT VERIFIED** — the verify command did not pass."
+            fi
+          else
+            echo "⚠️ No verify command given, so \"done\" is the model's own claim."
+          fi
+          echo
+          echo '```'
+          agit log | sed -e 's/\x1b\[[0-9;]*m//g' | head -40
+          echo '```'
+          echo
+          echo "_Per-line provenance lives in the ledger: \`agit blame <file>\`, \`agit why <file> <line>\`._"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ -n "$IN_VERIFY" ] && [ "$IN_FAIL_UNVERIFIED" = "true" ]; then
+          if ! python3 -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1])).get("verified") is True else 1)' "$stats"; then
+            echo "::error::the agent run did not end VERIFIED (agit exited $run_status)"
+            exit 1
+          fi
+        fi
+        exit 0
+
+    - name: upload the ledger report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: agit-run-${{ steps.agent.outputs.run-id }}
+        path: |
+          ${{ runner.temp }}/agit-dashboard.html
+          ${{ runner.temp }}/agit-run.html
+          ${{ runner.temp }}/agit-stats.json
+          ${{ runner.temp }}/agit-run.log
+        if-no-files-found: warn
+
+    - name: comment on the pull request
+      if: ${{ inputs.comment == 'true' && github.event.pull_request.number }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ steps.agent.outputs.run-id }}
+        VERIFIED: ${{ steps.agent.outputs.verified }}
+        SHARE: ${{ steps.agent.outputs.agent-share }}
+        SUMMARY: ${{ steps.agent.outputs.summary }}
+        STATS: ${{ steps.agent.outputs.stats-json }}
+      run: |
+        set -uo pipefail
+        body="$RUNNER_TEMP/agit-comment.md"
+        verdict="⚠️ not verified"
+        [ "$VERIFIED" = "true" ] && verdict="✅ verified"
+        {
+          echo "### 🤖 agit run"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| run | \`$RUN_ID\` |"
+          echo "| outcome | $verdict |"
+          echo "| agent-written lines | $SHARE |"
+          echo
+          echo "**What it says it did**"
+          echo
+          printf '> %s\n' "$SUMMARY"
+          echo
+          python3 - "$STATS" <<'PY'
+        import json, sys
+        try:
+            files = json.load(open(sys.argv[1])).get("files") or []
+        except Exception:
+            files = []
+        if files:
+            print("| file | agent lines | share |")
+            print("|---|---|---|")
+            for row in files[:20]:
+                print("| `%s` | %d / %d | %s%% |" % (row["path"], row["agent_lines"],
+                                                     row["total_lines"], row["agent_share"]))
+            print()
+        PY
+          echo "Every step, its reasoning and the exact model request are committed to the"
+          echo "ledger. Download the **agit-run** artifact for the HTML dashboard, or locally:"
+          echo
+          echo '```bash'
+          echo "agit blame <file>        # which step wrote each line"
+          echo "agit why <file> <line>   # the reasoning behind one line"
+          echo '```'
+        } > "$body"
+        gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$body"

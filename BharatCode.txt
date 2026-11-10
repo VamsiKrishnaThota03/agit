@@ -35,6 +35,8 @@ agent transcript can:
                            spend), no server and no network
   agit report              one self-contained HTML audit trail for a PR
   agit run --verify "..."  a definition of done the agent cannot talk past
+  agit continue <run>      resume a run that was interrupted
+  agit price --in X --out Y set your token rate, so spend shows in money
 
 
 HOW IT USES THE BHARATCODE MODEL API
@@ -72,7 +74,7 @@ BUILD, TEST, SIZE
 -----------------
   Language:      Python 3.9+
   Dependencies:  none (standard library and git only)
-  Tests:         python3 -m unittest discover -s tests -t .   (103 tests, offline)
+  Tests:         python3 -m unittest discover -s tests -t .   (134 tests, offline)
   CI:            GitHub Actions, Linux and macOS, Python 3.9-3.13
 
 
@@ -90,6 +92,9 @@ WHAT WAS BUILT HERE, SPECIFICALLY
     local paths out of everything sent to the model
   * an offline deterministic provider so the demo and the whole test suite run
     with no API key and no network
+  * a GitHub Action other repositories can adopt: run the agent in CI, fail
+    the job unless the verify command passes, comment the per-file provenance
+    on the pull request, and upload the dashboard as an artifact
   * a static-file UI (agit dashboard) that reads the ledger and renders runs,
     fork lineage, clickable per-line blame with the reasoning, and token spend
     -- deep-linkable, with no server listening anywhere

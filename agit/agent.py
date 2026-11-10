@@ -74,6 +74,7 @@ class Agent:
         toolbox: tools.Toolbox,
         on_step: Optional[Callable[[StepInfo, tools.ToolResult, Reply], None]] = None,
         on_notice: Optional[Callable[[str], None]] = None,
+        progress: Optional[Any] = None,
     ):
         self.root = os.path.abspath(root)
         self.cfg = cfg
@@ -82,6 +83,7 @@ class Agent:
         self.toolbox = toolbox
         self.on_step = on_step or (lambda *a: None)
         self.on_notice = on_notice or (lambda text: None)
+        self.progress = progress        # a ui.Spinner, or anything with start/stop
 
     # -- prompts ----------------------------------------------------------
     def _system_prompt(self) -> str:
@@ -109,14 +111,19 @@ class Agent:
 
     # -- main loop --------------------------------------------------------
     def run(self, task: str, fork_from: str = "", label: str = "",
-            start_step: int = 0, run_id: str = "") -> RunResult:
+            start_step: int = 0, run_id: str = "",
+            resume: Optional[RunInfo] = None) -> RunResult:
         started = time.time()
-        info: RunInfo = self.ledger.begin_run(
-            task=task, provider=self.cfg.provider, model=self.cfg.model,
-            label=label, fork_from=fork_from, run_id=run_id,
-        )
+        if resume is not None:
+            info = self.ledger.resume_run(resume)
+            task = task or info.task
+        else:
+            info = self.ledger.begin_run(
+                task=task, provider=self.cfg.provider, model=self.cfg.model,
+                label=label, fork_from=fork_from, run_id=run_id,
+            )
         step_no = start_step or info.steps
-        if not fork_from:
+        if not fork_from and resume is None:
             # Step 0 records the starting state, so blame can tell human code
             # from agent code. A fork already inherits that history.
             self.ledger.commit_step(
@@ -132,6 +139,10 @@ class Agent:
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": task},
         ]
+        if resume is not None:
+            recap = self._recap(info)
+            if recap:
+                messages.append({"role": "user", "content": recap})
         result = RunResult(run=info.run, branch=info.branch, verify_command=self.cfg.verify)
         stalls = 0
         tool_specs = tools.openai_tools()
@@ -145,6 +156,8 @@ class Agent:
                 result.status = "exhausted"
                 self.on_notice("token budget of %d reached" % self.cfg.budget_tokens)
                 break
+            if self.progress is not None:
+                self.progress.start("step %d: asking %s" % (step_no + 1, self.cfg.model))
             try:
                 reply = self.model.complete(_compact(messages), tool_specs)
             except ReplayMiss as exc:
@@ -155,6 +168,9 @@ class Agent:
                 result.status = "error"
                 result.summary = str(exc)
                 break
+            finally:
+                if self.progress is not None:
+                    self.progress.stop()
 
             call = reply.call
             if call is None:
@@ -302,10 +318,38 @@ class Agent:
         )
         return result
 
+    def _recap(self, info: RunInfo) -> str:
+        """Hand a resumed run its own history back, compactly.
+
+        A continued run cannot replay the original conversation -- the message
+        list died with the process -- so it gets the ledger's own record of what
+        has already happened instead of being told to start over.
+        """
+        steps = [s for s in self.ledger.steps(info.branch)
+                 if s.kind in ("tool", "finish")]
+        if not steps:
+            return ""
+        lines = ["This run was interrupted and is being continued. Steps already "
+                 "recorded in the ledger (do not repeat work that is already done):"]
+        for step in steps[-14:]:
+            mark = "ok" if step.ok else "FAILED"
+            detail = " %s" % step.target if step.target else ""
+            lines.append("  step %d: %s%s [%s]" % (step.step, step.tool, detail, mark))
+            if step.rationale:
+                lines.append("      why: %s" % step.rationale.splitlines()[0][:160])
+        lines.append("Continue from here. The workspace already reflects these steps.")
+        return "\n".join(lines)
+
     # -- verify -----------------------------------------------------------
     def _verify(self) -> Dict[str, Any]:
         self.on_notice("verify: %s" % self.cfg.verify)
-        out = tools.shell(self.cfg.verify, self.root, timeout=600)
+        if self.progress is not None:
+            self.progress.start("verifying: %s" % self.cfg.verify[:48])
+        try:
+            out = tools.shell(self.cfg.verify, self.root, timeout=600)
+        finally:
+            if self.progress is not None:
+                self.progress.stop()
         return {"ok": out["code"] == 0, "code": out["code"], "output": out["output"]}
 
 

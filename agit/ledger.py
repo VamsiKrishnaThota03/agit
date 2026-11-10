@@ -413,6 +413,27 @@ class Ledger:
             self._git("worktree", "prune", check=False)
         return stats
 
+    def workspace_drift(self, ref: str, workspace_root: str) -> Dict[str, List[str]]:
+        """What the human changed in the workspace since `ref` was recorded."""
+        tmp = os.path.join(self.root, AGIT_DIR, "drift-tmp")
+        if os.path.isdir(tmp):
+            self._git("worktree", "remove", "--force", tmp, check=False)
+            shutil.rmtree(tmp, ignore_errors=True)
+        self._git("worktree", "prune", check=False)
+        self._git("worktree", "add", "-q", "--detach", tmp, ref)
+        try:
+            return snapshot.compare(os.path.join(tmp, "workspace"), workspace_root)
+        finally:
+            self._git("worktree", "remove", "--force", tmp, check=False)
+            shutil.rmtree(tmp, ignore_errors=True)
+            self._git("worktree", "prune", check=False)
+
+    def resume_run(self, info: RunInfo) -> RunInfo:
+        """Point the ledger back at an existing run so it can be continued."""
+        self._git("checkout", "-q", info.branch)
+        fresh = self.read_run("HEAD")
+        return fresh or info
+
     def diff_refs(self, a: str, b: str, context: int = 3) -> str:
         return self._git("diff", "-U%d" % context, a, b, "--", "workspace/")
 

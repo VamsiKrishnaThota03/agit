@@ -119,6 +119,41 @@ def restore_from(src: str, root: str) -> Dict[str, int]:
     return {"written": written, "removed": removed}
 
 
+def compare(src: str, root: str) -> Dict[str, List[str]]:
+    """How `root` differs from the snapshot in `src`.
+
+    Used before anything overwrites the workspace, so a human's own edits are
+    never silently thrown away.
+    """
+    snapshot_files = {}
+    if os.path.isdir(src):
+        for rel in _walk(src):
+            if rel != ".agit-skipped":
+                snapshot_files[rel] = os.path.join(src, rel)
+    live = set(list_files(root))
+    modified: List[str] = []
+    for rel, path in snapshot_files.items():
+        target = os.path.join(root, rel)
+        if rel not in live and not os.path.isfile(target):
+            continue
+        if _read(target) != _read(path):
+            modified.append(rel)
+    return {
+        "modified": sorted(modified),
+        "added": sorted(live - set(snapshot_files)),
+        "deleted": sorted(rel for rel in snapshot_files
+                          if not os.path.isfile(os.path.join(root, rel))),
+    }
+
+
+def _read(path: str) -> Optional[bytes]:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
 def _prune_empty_dirs(root: str) -> None:
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):
         if os.path.abspath(dirpath) == os.path.abspath(root):

@@ -11,13 +11,13 @@ from typing import Any, Dict, List, Optional
 
 from . import blame as blame_mod
 from . import config as config_mod
-from . import dashboard, gitutil, report, snapshot, tools
+from . import dashboard, gitutil, pricing, report, snapshot, tools
 from .agent import Agent, RunResult
 from .config import AGIT_DIR, PRESETS, Config
 from .ledger import Ledger, LedgerError, RunInfo, StepInfo
 from .model import Cassette, ModelClient, ModelError
 from .script import ScriptError, ScriptProvider
-from .ui import Console, human_ms, human_tokens
+from .ui import Console, Spinner, human_ms, human_tokens
 
 VERSION = "1.0.0"
 
@@ -29,6 +29,7 @@ EPILOG = """examples
   agit why src/api.py 42                    the rationale behind one line
   agit fork 4 "try a simpler fix"           branch the agent at step 4
   agit diff @last run/1110-ab12             compare two attempts
+  agit continue @last                       resume a run you interrupted
   agit replay @last                         re-drive the run with no network
   agit report @last -o run.html             shareable audit trail
   agit dashboard --open                     every run, visually, in a browser
@@ -275,6 +276,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         root, cfg, ledger, client, toolbox,
         on_step=lambda step, result, reply: _render_step(console, step, result, args.verbose),
         on_notice=lambda text: console.note("  " + text),
+        progress=Spinner(console),
     )
     try:
         result = agent.run(task, fork_from=fork_ref, label=args.label or "")
@@ -327,6 +329,10 @@ def _render_outcome(console: Console, result: RunResult, cfg: Config) -> None:
                else "%d new (run is %d steps deep)" % (done, result.steps))
     console.kv("tokens", "%s in / %s out" % (human_tokens(result.tokens_in),
                                              human_tokens(result.tokens_out)))
+    rate = pricing.rate_for(cfg, config_mod.load_project_config(find_root()))
+    if rate is not None:
+        console.kv("cost", rate.format(result.tokens_in, result.tokens_out)
+                   + ("" if rate.free else console.theme.dim("  (your configured rate)")))
     console.kv("wall time", human_ms(result.duration_ms))
     console.write("")
     console.note("agit log                 every step, in order")
@@ -338,6 +344,14 @@ def cmd_runs(args: argparse.Namespace) -> int:
     console = Console()
     ledger = Ledger(find_root()).require()
     runs = ledger.runs()
+    if getattr(args, "json", False):
+        print(json.dumps([{
+            "run": r.run, "label": r.label, "branch": r.branch, "task": r.task,
+            "status": r.status, "verified": r.verified, "steps": r.steps,
+            "tokens": r.tokens, "provider": r.provider, "model": r.model,
+            "forked_from": r.forked_from, "started_at": r.started_at,
+        } for r in runs], indent=2))
+        return 0
     if not runs:
         console.note("no runs yet")
         return 0
@@ -544,6 +558,8 @@ def cmd_fork(args: argparse.Namespace) -> int:
         cfg.cassette_mode = args.cassette
     task = (args.task or "").strip() or info.task
     console.banner("forking %s at step %s" % (info.run, args.step))
+    if not guard_overwrite(console, ledger, info, root, args.force, "agit fork"):
+        return 3
     stats = ledger.restore_workspace(sha, root)
     console.ok("workspace rewound to step %s (%d files written, %d removed)"
                % (args.step, stats["written"], stats["removed"]))
@@ -565,7 +581,8 @@ def cmd_fork(args: argparse.Namespace) -> int:
                             confirm=confirm_command(console))
     agent = Agent(root, cfg, ledger, client, toolbox,
                   on_step=lambda s, r, rep: _render_step(console, s, r, args.verbose),
-                  on_notice=lambda text: console.note("  " + text))
+                  on_notice=lambda text: console.note("  " + text),
+                  progress=Spinner(console))
     console.kv("task", task[:110])
     console.write("")
     try:
@@ -579,11 +596,49 @@ def cmd_fork(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def guard_overwrite(console: Console, ledger: Ledger, info: RunInfo, root: str,
+                    force: bool, action: str) -> bool:
+    """Never overwrite work the ledger has not seen without saying so.
+
+    agit snapshots the workspace at every step, so anything that differs from
+    the run's tip was written by a human afterwards. Rewinding would destroy it.
+    """
+    try:
+        drift = ledger.workspace_drift(info.branch, root)
+    except LedgerError:
+        return True
+    total = sum(len(v) for v in drift.values())
+    if not total:
+        return True
+    t = console.theme
+    console.write("")
+    console.warn("your workspace has %d change(s) that the ledger never recorded:" % total)
+    for kind, label in (("modified", "edited"), ("added", "new"), ("deleted", "deleted")):
+        for path in drift[kind][:8]:
+            console.write("    " + t.yellow(label.ljust(8)) + path)
+        if len(drift[kind]) > 8:
+            console.note("    ... and %d more %s" % (len(drift[kind]) - 8, label))
+    console.note("  %s would overwrite them. Commit or copy them first." % action)
+    if force:
+        console.warn("--force given, continuing anyway")
+        return True
+    if not sys.stdin.isatty():
+        console.fail("refusing to %s. Re-run with --force if you meant it." % action)
+        return False
+    try:
+        answer = input("  overwrite anyway? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in ("y", "yes")
+
+
 def cmd_goto(args: argparse.Namespace) -> int:
     console = Console()
     root = find_root()
     ledger = Ledger(root).require()
     sha, info = resolve_step_ref(ledger, args.step, args.run)
+    if not guard_overwrite(console, ledger, info, root, args.force, "agit goto"):
+        return 3
     stats = ledger.restore_workspace(sha, root)
     console.write("")
     console.ok("workspace restored to run %s step %s" % (info.run, args.step))
@@ -604,14 +659,65 @@ def cmd_undo(args: argparse.Namespace) -> int:
         return 1
     back = max(1, int(args.steps))
     target = steps[max(0, len(steps) - 1 - back)]
-    sha = target.sha
-    stats = ledger.restore_workspace(sha, root)
+    if not guard_overwrite(console, ledger, info, root, args.force, "agit undo"):
+        return 3
+    stats = ledger.restore_workspace(target.sha, root)
     console.write("")
     console.ok("rewound %d step(s): workspace is now as it was after step %02d"
                % (back, target.step))
     console.kv("written", str(stats["written"]))
     console.kv("removed", str(stats["removed"]))
     return 0
+
+
+def cmd_continue(args: argparse.Namespace) -> int:
+    console = Console(quiet=args.quiet)
+    root = find_root()
+    ledger = Ledger(root).require()
+    info = ledger.resolve_run(args.run_spec)
+    cfg = build_config(args, root)
+    recorded = recorded_config(ledger, info)
+    if not getattr(args, "verify", None) and recorded.get("verify"):
+        cfg.verify = recorded["verify"]
+
+    problems = config_mod.check(cfg)
+    if problems:
+        for p in problems:
+            console.fail(p)
+        return 2
+
+    done = [s for s in ledger.steps(info.branch) if s.kind in ("tool", "finish")]
+    console.banner("continuing %s" % info.run)
+    console.kv("task", (args.task or info.task)[:110])
+    console.kv("already done", "%d steps (last: %s)"
+               % (len(done), (done[-1].tool if done else "nothing")))
+    if info.verified:
+        console.warn("this run already ended VERIFIED; continuing anyway")
+    if cfg.verify:
+        console.kv("done when", cfg.verify)
+    console.write("")
+
+    try:
+        client = make_client(cfg, root, getattr(args, "script", "") or "")
+    except ScriptError as exc:
+        console.fail(str(exc))
+        return 2
+    toolbox = tools.Toolbox(root, allow_commands=cfg.allow_commands,
+                            confirm=confirm_command(console))
+    agent = Agent(root, cfg, ledger, client, toolbox,
+                  on_step=lambda s, r, rep: _render_step(console, s, r, args.verbose),
+                  on_notice=lambda text: console.note("  " + text),
+                  progress=Spinner(console))
+    try:
+        result = agent.run(args.task or info.task, resume=info)
+    except KeyboardInterrupt:
+        console.warn("interrupted again; agit continue picks up from the last step")
+        return 130
+    finally:
+        if client.cassette:
+            client.cassette.save()
+    _render_outcome(console, result, cfg)
+    return 0 if result.ok else 1
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
@@ -759,6 +865,61 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stats_json(console: Console, ledger: Ledger, info: RunInfo,
+                steps: List[StepInfo], by_tool: Dict[str, int],
+                files: List[str], rate: Any) -> int:
+    """Machine-readable stats, for CI and the GitHub Action."""
+    tokens_in = sum(s.tokens_in for s in steps)
+    tokens_out = sum(s.tokens_out for s in steps)
+    per_file = []
+    agent_lines = total_lines = 0
+    for rel in files:
+        try:
+            lines = blame_mod.blame_file(ledger, rel, info.branch)
+        except LedgerError:
+            continue
+        mine, total = blame_mod.summarise_authorship(lines)
+        agent_lines += mine
+        total_lines += total
+        per_file.append({"path": rel, "agent_lines": mine, "total_lines": total,
+                         "agent_share": round(100.0 * mine / total, 1) if total else 0.0})
+    # The agent's own summary and the verify command live in the run-end
+    # commit; reading them here means CI never has to scrape terminal output.
+    end_data: Dict[str, Any] = {}
+    end = next((st for st in ledger.steps(info.branch) if st.kind == "run-end"), None)
+    if end is not None:
+        raw = ledger.step_artifact(end, "result.json")
+        if raw:
+            try:
+                end_data = json.loads(raw)
+            except ValueError:
+                end_data = {}
+    payload = {
+        "run": info.run,
+        "task": info.task,
+        "summary": str(end_data.get("summary") or ""),
+        "verify_command": str(end_data.get("verify_command") or ""),
+        "status": info.status,
+        "verified": info.verified,
+        "provider": info.provider,
+        "model": info.model,
+        "steps": len(steps),
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "lines_added": sum(s.added for s in steps),
+        "lines_removed": sum(s.removed for s in steps),
+        "duration_ms": sum(s.duration_ms for s in steps),
+        "tools": by_tool,
+        "files": per_file,
+        "agent_lines": agent_lines,
+        "total_lines": total_lines,
+        "agent_share": round(100.0 * agent_lines / total_lines, 1) if total_lines else 0.0,
+        "cost": (rate.format(tokens_in, tokens_out) if rate else None),
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     console = Console()
     root = find_root()
@@ -767,7 +928,8 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
         console.fail("no runs to show yet. Try `agit demo` or `agit run \"<task>\"`.")
         return 1
     out = args.output or os.path.join(root, "agit-dashboard.html")
-    path = dashboard.build(ledger, out, include_io=args.io)
+    rate = pricing.rate_for(build_config(args, root), config_mod.load_project_config(root))
+    path = dashboard.build(ledger, out, include_io=args.io, rate=rate)
     size = os.path.getsize(path)
     console.write("")
     console.ok("wrote %s (%.0f KB)" % (short_path(path), size / 1024.0))
@@ -791,6 +953,50 @@ def _open_in_browser(path: str, console: Console) -> None:
     console.note("could not launch a browser; open the file manually")
 
 
+def cmd_price(args: argparse.Namespace) -> int:
+    console = Console()
+    root = find_root()
+    cfg = build_config(args, root)
+    project = config_mod.load_project_config(root)
+    t = console.theme
+
+    if args.input_per_m is None and args.output_per_m is None:
+        rate = pricing.rate_for(cfg, project)
+        console.write("")
+        console.kv("provider", pricing.key_for(cfg))
+        if rate is None:
+            console.fail("no rate set for %s" % pricing.key_for(cfg))
+            console.note("agit ships no price list on purpose: published rates change and")
+            console.note("differ per account, so a built-in number would be a quiet lie.")
+            console.note("set yours (per million tokens):")
+            console.note("  agit price --in 0.20 --out 0.60")
+            console.note("  agit price --in 18 --out 54 --currency INR")
+            return 1
+        console.kv("source", rate.source)
+        if rate.free:
+            console.ok("free: %s never bills you" % cfg.provider)
+            return 0
+        console.kv("input", "%s per 1M tokens" % rate.format(1_000_000, 0))
+        console.kv("output", "%s per 1M tokens" % rate.format(0, 1_000_000))
+        console.note("example: a 12k-in / 1k-out run costs %s"
+                     % rate.format(12_000, 1_000))
+        return 0
+
+    if args.input_per_m is None or args.output_per_m is None:
+        console.fail("give both --in and --out (price per million tokens)")
+        return 2
+    updated = pricing.store(project, cfg, args.input_per_m, args.output_per_m,
+                            args.currency)
+    path = config_mod.save_project_config(root, updated)
+    rate = pricing.rate_for(cfg, updated)
+    console.write("")
+    console.ok("rate saved for %s in %s" % (pricing.key_for(cfg), short_path(path)))
+    if rate is not None:
+        console.kv("a 12k/1k run", rate.format(12_000, 1_000))
+    console.note("cost now shows in agit run, agit stats and the dashboard")
+    return 0
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     console = Console()
     root = find_root()
@@ -801,11 +1007,25 @@ def cmd_stats(args: argparse.Namespace) -> int:
     for step in steps:
         by_tool[step.tool or "?"] = by_tool.get(step.tool or "?", 0) + 1
     files = sorted({s.target for s in steps if s.tool in ("write_file", "edit_file") and s.target})
+
+    if getattr(args, "json", False):
+        return _stats_json(console, ledger, info, steps, by_tool, files,
+                           pricing.rate_for(build_config(args, root),
+                                            config_mod.load_project_config(root)))
     console.write("")
     console.rule("run %s" % info.run)
     console.kv("task", info.task[:100])
     console.kv("steps", str(len(steps)))
-    console.kv("tokens", human_tokens(sum(s.tokens for s in steps)))
+    tokens_in = sum(s.tokens_in for s in steps)
+    tokens_out = sum(s.tokens_out for s in steps)
+    console.kv("tokens", "%s (%s in / %s out)"
+               % (human_tokens(tokens_in + tokens_out),
+                  human_tokens(tokens_in), human_tokens(tokens_out)))
+    rate = pricing.rate_for(build_config(args, root), config_mod.load_project_config(root))
+    if rate is not None:
+        console.kv("cost", rate.format(tokens_in, tokens_out))
+    else:
+        console.kv("cost", console.theme.dim("set a rate with `agit price --in X --out Y`"))
     console.kv("model time", human_ms(sum(s.duration_ms for s in steps)))
     console.kv("lines", "+%d / -%d" % (sum(s.added for s in steps), sum(s.removed for s in steps)))
     console.write("")
@@ -984,6 +1204,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("runs", help="list recorded runs")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_runs)
 
     p = sub.add_parser("log", help="show a run step by step")
@@ -1028,6 +1249,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget-tokens", dest="budget_tokens", type=int)
     p.add_argument("--yes", "-y", action="store_true")
     p.add_argument("--no-run", action="store_true", help="just rewind the workspace")
+    p.add_argument("--force", action="store_true",
+                   help="rewind even if you have changes the ledger never recorded")
     p.add_argument("--cassette", choices=["live", "reuse", "replay"])
     p.add_argument("--verbose", "-v", action="store_true")
     model_flags(p)
@@ -1036,12 +1259,28 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("goto", help="restore the workspace to a step")
     p.add_argument("step")
     p.add_argument("--run", default="")
+    p.add_argument("--force", action="store_true",
+                   help="overwrite changes the ledger never recorded")
     p.set_defaults(func=cmd_goto)
 
     p = sub.add_parser("undo", help="rewind the workspace by N steps")
     p.add_argument("steps", nargs="?", default=1, type=int)
     p.add_argument("--run", default="")
+    p.add_argument("--force", action="store_true",
+                   help="overwrite changes the ledger never recorded")
     p.set_defaults(func=cmd_undo)
+
+    p = sub.add_parser("continue", help="resume an interrupted run on the same branch")
+    p.add_argument("run_spec", nargs="?", default="@last")
+    p.add_argument("task", nargs="?", default="", help="optional extra instruction")
+    p.add_argument("--verify")
+    p.add_argument("--max-steps", dest="max_steps", type=int)
+    p.add_argument("--budget-tokens", dest="budget_tokens", type=int)
+    p.add_argument("--yes", "-y", action="store_true")
+    p.add_argument("--verbose", "-v", action="store_true")
+    p.add_argument("--quiet", "-q", action="store_true")
+    model_flags(p)
+    p.set_defaults(func=cmd_continue)
 
     p = sub.add_parser("replay", help="re-drive a recorded run and report divergence")
     p.add_argument("run_spec", nargs="?", default="@last")
@@ -1061,10 +1300,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output", default="")
     p.add_argument("--open", action="store_true", help="open it in your browser")
     p.add_argument("--io", action="store_true", help="embed raw model responses too")
+    model_flags(p)
     p.set_defaults(func=cmd_dashboard)
 
-    p = sub.add_parser("stats", help="where the tokens and the lines went")
+    p = sub.add_parser("price", help="set or show your token rate, so cost shows in money")
+    p.add_argument("--in", dest="input_per_m", type=float,
+                   help="price per 1M input tokens")
+    p.add_argument("--out", dest="output_per_m", type=float,
+                   help="price per 1M output tokens")
+    p.add_argument("--currency", default="USD")
+    model_flags(p)
+    p.set_defaults(func=cmd_price)
+
+    p = sub.add_parser("stats", help="where the tokens, the money and the lines went")
     p.add_argument("--run", default="")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    model_flags(p)
     p.set_defaults(func=cmd_stats)
 
     p = sub.add_parser("demo", help="offline end-to-end demo, no API key needed")

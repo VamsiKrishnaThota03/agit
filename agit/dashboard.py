@@ -317,7 +317,8 @@ function renderTimeline(body, r) {
     ['lines', '+' + r.added + ' / -' + r.removed],
     ['tokens', fmtTok(r.tokens)],
     ['model time', fmtMs(r.duration_ms)],
-    ['forked from', r.parent_run ? (r.parent_label || r.parent_run) + '@' + r.parent_step : '—'],
+    r.cost ? ['cost', r.cost]
+           : ['forked from', r.parent_run ? (r.parent_label || r.parent_run) + '@' + r.parent_step : '—'],
   ]);
   r.steps_detail.forEach(s => {
     const card = el('div', 'step ' + (s.kind === 'finish' ? 'fin' : (s.ok ? 'ok' : 'bad')));
@@ -413,7 +414,7 @@ function renderSpend(body, r) {
     ['total', fmtTok(r.tokens)],
     ['model time', fmtMs(r.duration_ms)],
     ['steps', String(r.steps)],
-    ['cached steps', String(steps.filter(s => s.cached).length)],
+    r.cost ? ['cost', r.cost] : ['cached steps', String(steps.filter(s => s.cached).length)],
   ]);
   body.appendChild(el('h2', 'sectitle', 'tokens per step'));
   const wrap = el('div', 'spend');
@@ -427,7 +428,7 @@ function renderSpend(body, r) {
     fill.style.width = Math.max(2, Math.round(100 * s.tokens / maxTok)) + '%';
     track.appendChild(fill);
     row.appendChild(track);
-    row.appendChild(el('div', 'val', fmtTok(s.tokens) + ' tok'));
+    row.appendChild(el('div', 'val', s.cost ? s.cost : fmtTok(s.tokens) + ' tok'));
     wrap.appendChild(row);
   });
   body.appendChild(wrap);
@@ -467,7 +468,8 @@ render();
 """
 
 
-def _steps_of(ledger: Ledger, run: RunInfo, include_io: bool) -> List[Dict[str, Any]]:
+def _steps_of(ledger: Ledger, run: RunInfo, include_io: bool,
+              rate: Optional[Any] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for step in ledger.steps(run.branch):
         if step.kind not in ("tool", "finish"):
@@ -498,6 +500,7 @@ def _steps_of(ledger: Ledger, run: RunInfo, include_io: bool) -> List[Dict[str, 
             "diff": diff,
             "result": result[:MAX_RESULT_CHARS],
             "cached": bool(meta.get("cached")),
+            "cost": (rate.format(step.tokens_in, step.tokens_out) if rate else ""),
         }
         if include_io:
             row["response"] = (ledger.step_artifact(step, "response.json") or "")[:MAX_RESULT_CHARS]
@@ -505,14 +508,19 @@ def _steps_of(ledger: Ledger, run: RunInfo, include_io: bool) -> List[Dict[str, 
     return out
 
 
-def collect(ledger: Ledger, include_io: bool = False) -> Dict[str, Any]:
-    """Read the whole ledger into a JSON-serialisable shape."""
+def collect(ledger: Ledger, include_io: bool = False,
+            rate: Optional[Any] = None) -> Dict[str, Any]:
+    """Read the whole ledger into a JSON-serialisable shape.
+
+    `rate` is an optional pricing.Rate; when absent, cost is simply absent
+    rather than guessed.
+    """
     runs: List[Dict[str, Any]] = []
     by_id = {}
     for info in ledger.runs():
         by_id[info.run] = info
     for info in ledger.runs():
-        steps = _steps_of(ledger, info, include_io)
+        steps = _steps_of(ledger, info, include_io, rate)
         parent_run, parent_step = "", 0
         if info.forked_from and "@" in info.forked_from:
             parent_run, _, raw_step = info.forked_from.partition("@")
@@ -561,6 +569,8 @@ def collect(ledger: Ledger, include_io: bool = False) -> Dict[str, Any]:
             "tokens": sum(s["tokens"] for s in steps),
             "tokens_in": sum(s["tokens_in"] for s in steps),
             "tokens_out": sum(s["tokens_out"] for s in steps),
+            "cost": (rate.format(sum(s["tokens_in"] for s in steps),
+                                 sum(s["tokens_out"] for s in steps)) if rate else ""),
             "duration_ms": sum(s["duration_ms"] for s in steps),
             "parent_run": parent_run,
             "parent_label": (parent.label or parent.run) if parent else "",
@@ -608,8 +618,9 @@ def render(data: Dict[str, Any]) -> str:
     return head + header + shell + script + "</body></html>"
 
 
-def build(ledger: Ledger, out_path: str, include_io: bool = False) -> str:
-    html_text = render(collect(ledger, include_io=include_io))
+def build(ledger: Ledger, out_path: str, include_io: bool = False,
+          rate: Optional[Any] = None) -> str:
+    html_text = render(collect(ledger, include_io=include_io, rate=rate))
     out_path = os.path.abspath(out_path)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
