@@ -60,8 +60,12 @@ class TestLedgerBasics(WorkspaceCase):
         parent id ambiguous."""
         parent = self.run_agent(FIX_STEPS, label="demo")
         self.run_agent(FIX_STEPS, label="replay-of-" + parent.run)
-        resolved = self.ledger.resolve_run(parent.run[:11])
+        # Prefix through the random salt: two runs started in the same second
+        # share everything before it, so a shorter prefix is honestly ambiguous.
+        prefix = "-".join(parent.run.split("-")[:3])
+        resolved = self.ledger.resolve_run(prefix)
         self.assertEqual(resolved.run, parent.run)
+        self.assertEqual(self.ledger.resolve_run(parent.run).run, parent.run)
 
     def test_step_artifacts_hold_the_model_io(self):
         result = self.run_agent(FIX_STEPS)
