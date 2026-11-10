@@ -13,8 +13,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python: ["3.9", "3.13"]
+        # Oldest supported interpreter and newest, on Linux and macOS.
+        # ubuntu-latest (26.04) ships no prebuilt 3.9, so pin that leg to 22.04.
+        include:
+          - os: ubuntu-22.04
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: macos-latest
+            python: "3.9"
+          - os: macos-latest
+            python: "3.13"
     steps:
       - uses: actions/checkout@v4
 
