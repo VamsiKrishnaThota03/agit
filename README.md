@@ -326,13 +326,13 @@ agit speaks one protocol: `POST {base_url}/chat/completions`, OpenAI-shaped.
 Nothing about any single vendor is hardcoded, and no key is ever written to the
 repo. `agit doctor` tells you exactly what is missing.
 
-| provider | how to get it | configure |
+| provider | how to get it, free | configure |
 |---|---|---|
 | `bharatcode` | free student access / hackathon key | `BHARATCODE_BASE_URL`, `BHARATCODE_API_KEY`, `BHARATCODE_MODEL` |
 | `ollama` | free and offline: `ollama pull qwen2.5-coder:7b` | nothing, defaults to `localhost:11434` |
-| `groq` | free developer tier | `GROQ_API_KEY` |
-| `openrouter` | several `:free` models | `OPENROUTER_API_KEY` |
-| `gemini` | Google AI Studio free tier | `GEMINI_API_KEY` |
+| `groq` | free plan; limits live in your console settings | `GROQ_API_KEY` |
+| `gemini` | Google AI Studio: the Flash tier is free of charge | `GEMINI_API_KEY` |
+| `openrouter` | models listed at $0 — the ids ending `:free` | `OPENROUTER_API_KEY` + `AGIT_MODEL` |
 | `openai-compatible` | anything else | `AGIT_BASE_URL`, `AGIT_API_KEY`, `AGIT_MODEL` |
 | `script` | no key, no network | bundled deterministic planner (demo, tests, CI) |
 
@@ -342,9 +342,16 @@ export BHARATCODE_API_KEY="..."
 agit doctor --ping
 ```
 
+Two things to know about free tiers. They are **aggressively rate limited** —
+agit reads the wait the provider asks for and tells you it is waiting, rather
+than hammering the endpoint. And most of them **train on what you send**; agit
+puts your file contents in the prompt, so point a free tier at code you are
+happy to publish.
+
 Models without native tool calling still work: `--no-native-tools` switches the
 agent to a single-JSON-object protocol, and the parser is deliberately forgiving
-about fences and surrounding chatter.
+about fences and surrounding chatter. Models that *claim* tool calling but
+mis-emit a call are handled too — see the shakedown notes above.
 
 ## Safety
 
