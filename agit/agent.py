@@ -10,7 +10,8 @@ from typing import Any, Callable, Dict, List, Optional
 from . import snapshot, tools
 from .config import Config
 from .ledger import Ledger, RunInfo, StepInfo
-from .model import ModelClient, ModelError, ReplayMiss, Reply, ToolCall
+from .model import (ModelClient, ModelError, ReplayMiss, Reply, ToolCall,
+                    ToolCallRejected)
 
 SYSTEM = """You are agit, an autonomous software engineer working inside one workspace.
 
@@ -30,6 +31,8 @@ Rules of engagement:
 6. Call finish only when the task is genuinely done, with a summary a reviewer
    can act on.
 """
+
+MAX_REJECTIONS = 3          # consecutive malformed tool calls before giving up
 
 JSON_PROTOCOL = """This model is being driven without native tool calling. Reply with
 exactly one JSON object and nothing else:
@@ -145,6 +148,7 @@ class Agent:
                 messages.append({"role": "user", "content": recap})
         result = RunResult(run=info.run, branch=info.branch, verify_command=self.cfg.verify)
         stalls = 0
+        rejections = 0
         tool_specs = tools.openai_tools()
 
         while True:
@@ -164,6 +168,46 @@ class Agent:
                 result.status = "diverged"
                 result.summary = str(exc)
                 break
+            except ToolCallRejected as exc:
+                # A model mistake, not a transport failure: record it and let
+                # the model see exactly what the provider objected to.
+                rejections += 1
+                step_no += 1
+                self.ledger.commit_step(
+                    {"run": info.run, "step": step_no, "kind": "tool",
+                     "tool": "(rejected tool call)", "target": "", "ok": False,
+                     "model": self.cfg.model,
+                     "rationale": "The provider rejected this tool call as malformed; "
+                                  "the model was asked to re-issue it."},
+                    {"rejection.txt": exc.detail,
+                     "failed_generation.txt": exc.generation or "(not echoed back)"},
+                    workspace_root=None,
+                )
+                self.on_notice("malformed tool call rejected by the provider; retrying")
+                if rejections == 1:
+                    guidance = _schema_hint(exc.detail)
+                else:
+                    # Twice in a row means this model cannot drive that tool
+                    # through the native interface. Offer it the plain-JSON
+                    # protocol instead, which agit parses just as happily.
+                    guidance = (_schema_hint(exc.detail) + "\n\n" +
+                                "If the tool interface keeps failing, reply with NOTHING but "
+                                "a single JSON object instead, and agit will run it:\n"
+                                '{"rationale": "one sentence", "tool": "<name>", '
+                                '"args": {...}}')
+                    self.on_notice("offering the model the plain-JSON fallback protocol")
+                if rejections >= MAX_REJECTIONS:
+                    result.status = "stalled"
+                    result.summary = ("the model kept emitting tool calls the provider "
+                                      "rejected: %s" % exc.detail[:500])
+                    break
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your previous tool call was rejected by the API as malformed:\n%s\n\n"
+                        "%s" % (exc.detail[:500], guidance)),
+                })
+                continue
             except ModelError as exc:
                 result.status = "error"
                 result.summary = str(exc)
@@ -414,6 +458,31 @@ def _safe_args(args: Dict[str, Any], limit: int = 4000) -> Dict[str, Any]:
 
 def _redact_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{k: v for k, v in m.items() if k != "api_key"} for m in messages]
+
+
+def _schema_hint(detail: str) -> str:
+    """Tell the model the exact shape of the tool it just botched.
+
+    Providers name the offending tool in the rejection, and agit already owns
+    the schema, so the retry can carry the answer instead of a scolding.
+    """
+    import re
+
+    match = re.search(r"for tool ([A-Za-z_][A-Za-z0-9_]*)", detail or "")
+    name = match.group(1) if match else ""
+    spec = next((s for s in tools.SPECS if s["name"] == name), None)
+    if spec is None:
+        return ("Re-issue it as ONE well-formed tool call, with every required argument "
+                "present and the arguments as a JSON object.")
+    params = spec["parameters"]
+    required = params.get("required") or []
+    example = {}
+    for key in (required or list(params.get("properties", {}))[:1]):
+        example[key] = "..."
+    return ("Call `%s` again with its arguments as a JSON object. Required: %s.\n"
+            "For example: %s(%s)"
+            % (name, ", ".join("`%s`" % r for r in required) or "(none)",
+               name, json.dumps(example)))
 
 
 def _target_of(call: ToolCall) -> str:

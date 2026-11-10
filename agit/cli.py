@@ -77,14 +77,14 @@ def build_config(args: argparse.Namespace, root: str) -> Config:
 
 
 def make_client(cfg: Config, root: str, script_path: str = "",
-                pace_ms: int = 0) -> ModelClient:
+                pace_ms: int = 0, on_retry: Optional[Any] = None) -> ModelClient:
     cassette = Cassette(os.path.join(root, AGIT_DIR, "cassette.json"))
     provider = None
     if cfg.offline:
         provider = ScriptProvider.discover(root, script_path, pace_ms=pace_ms)
     elif script_path:
         raise ScriptError("--script only applies to --provider script")
-    return ModelClient(cfg, cassette=cassette, script=provider)
+    return ModelClient(cfg, cassette=cassette, script=provider, on_retry=on_retry)
 
 
 def confirm_command(console: Console) -> Any:
@@ -252,7 +252,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     ledger = Ledger.ensure(root)
     ensure_gitignore(root)
     try:
-        client = make_client(cfg, root, getattr(args, "script", "") or "")
+        client = make_client(cfg, root, getattr(args, "script", "") or "",
+                             on_retry=lambda text: console.warn(text))
     except ScriptError as exc:
         console.fail(str(exc))
         return 2
@@ -573,7 +574,8 @@ def cmd_fork(args: argparse.Namespace) -> int:
             console.fail(p)
         return 2
     try:
-        client = make_client(cfg, root, getattr(args, "script", "") or "")
+        client = make_client(cfg, root, getattr(args, "script", "") or "",
+                             on_retry=lambda text: console.warn(text))
     except ScriptError as exc:
         console.fail(str(exc))
         return 2
@@ -698,7 +700,8 @@ def cmd_continue(args: argparse.Namespace) -> int:
     console.write("")
 
     try:
-        client = make_client(cfg, root, getattr(args, "script", "") or "")
+        client = make_client(cfg, root, getattr(args, "script", "") or "",
+                             on_retry=lambda text: console.warn(text))
     except ScriptError as exc:
         console.fail(str(exc))
         return 2
@@ -758,7 +761,8 @@ def cmd_replay(args: argparse.Namespace) -> int:
     console.write("")
 
     try:
-        client = make_client(cfg, root, getattr(args, "script", "") or "")
+        client = make_client(cfg, root, getattr(args, "script", "") or "",
+                             on_retry=lambda text: console.warn(text))
     except ScriptError as exc:
         console.fail(str(exc))
         return 2

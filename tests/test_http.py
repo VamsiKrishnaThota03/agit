@@ -43,7 +43,12 @@ class Transport:
             "body": json.loads(request.data.decode("utf-8")),
             "timeout": timeout,
         })
-        outcome = self.outcomes.pop(0) if self.outcomes else self.outcomes
+        # Once the script runs out, keep repeating the last outcome: that is
+        # what a provider that is still rate limiting you actually does.
+        outcome = self.outcomes.pop(0) if len(self.outcomes) > 1 else (
+            self.outcomes[0] if self.outcomes else None)
+        if outcome is None:
+            raise AssertionError("transport called with no outcomes left")
         if isinstance(outcome, Exception):
             raise outcome
         return FakeResponse(json.dumps(outcome).encode("utf-8"))
@@ -53,7 +58,8 @@ class HttpCase(unittest.TestCase):
     def setUp(self):
         self.real_urlopen = model_mod.urllib.request.urlopen
         self.real_sleep = model_mod.time.sleep
-        model_mod.time.sleep = lambda seconds: None     # no real backoff waits
+        self.slept: List[float] = []
+        model_mod.time.sleep = self.slept.append   # record instead of waiting
         self.addCleanup(self._restore)
 
     def _restore(self):
@@ -121,19 +127,82 @@ class TestRetries(HttpCase):
         self.assertEqual(len(self.transport.calls), 2)
 
     def test_retries_eventually_give_up_with_advice(self):
-        client = self.client([http_error(429, "nope")] * 4)
+        client = self.client([http_error(429, "nope")])
         with self.assertRaises(ModelError) as caught:
             self.ask(client)
         self.assertIn("rate limited", str(caught.exception))
-        self.assertEqual(len(self.transport.calls), 4)
+        self.assertEqual(len(self.transport.calls), model_mod.MAX_ATTEMPTS)
+
+    def test_retry_after_header_is_obeyed(self):
+        error = http_error(429, "slow down")
+        error.headers = {"Retry-After": "9"}
+        client = self.client([error, wrap_response("ok")])
+        self.assertEqual(self.ask(client).text, "ok")
+        self.assertAlmostEqual(self.slept[0], 9.5, places=3)
+
+    def test_wait_named_in_the_error_body_is_obeyed(self):
+        body = ('{"error":{"message":"Rate limit reached for model X ... Please try '
+                'again in 9.445714285s","code":"rate_limit_exceeded"}}')
+        client = self.client([http_error(429, body), wrap_response("ok")])
+        self.assertEqual(self.ask(client).text, "ok")
+        self.assertAlmostEqual(self.slept[0], 9.945714285, places=3)
+
+    def test_a_wait_longer_than_agit_will_hold_is_not_attempted(self):
+        error = http_error(429, "come back later")
+        error.headers = {"Retry-After": "3600"}
+        client = self.client([error])
+        with self.assertRaises(ModelError):
+            self.ask(client)
+        self.assertEqual(self.slept, [], "should refuse to sleep for an hour")
+
+    def test_retry_is_reported_to_the_caller(self):
+        notices = []
+        transport = Transport([http_error(429, "try again in 2s"), wrap_response("ok")])
+        model_mod.urllib.request.urlopen = transport
+        cfg = Config(provider="groq", base_url="https://api.test/v1", api_key="k",
+                     model="m")
+        client = ModelClient(cfg, cassette=None, on_retry=notices.append)
+        client.complete([{"role": "user", "content": "hi"}], None)
+        self.assertEqual(len(notices), 1)
+        self.assertIn("rate limited", notices[0])
+        self.assertIn("2.5s", notices[0])
 
     def test_unreachable_host_explains_itself(self):
-        client = self.client([urllib.error.URLError("nodename nor servname provided")] * 4)
+        client = self.client([urllib.error.URLError("nodename nor servname provided")])
         with self.assertRaises(ModelError) as caught:
             self.ask(client)
         message = str(caught.exception)
         self.assertIn("cannot reach", message)
         self.assertIn("agit doctor", message)
+
+
+class TestRetryDelay(unittest.TestCase):
+    def test_header_in_seconds(self):
+        self.assertAlmostEqual(model_mod.retry_delay({"Retry-After": "4"}, "", 0), 4.5)
+
+    def test_header_in_milliseconds(self):
+        self.assertAlmostEqual(
+            model_mod.retry_delay({"x-ratelimit-reset-tokens": "1500ms"}, "", 0), 2.0)
+
+    def test_body_phrasings(self):
+        for body in ("please try again in 3s", "retry after 3 s",
+                     "you must please wait 3s", "available in 3 seconds"):
+            self.assertAlmostEqual(model_mod.retry_delay(None, body, 0), 3.5, msg=body)
+
+    def test_falls_back_to_backoff_that_grows(self):
+        first = model_mod.retry_delay(None, "boom", 0)
+        later = model_mod.retry_delay(None, "boom", 3)
+        self.assertLess(first, later)
+
+    def test_backoff_fallback_stays_within_the_cap(self):
+        for attempt in range(model_mod.MAX_ATTEMPTS):
+            self.assertLessEqual(model_mod.retry_delay(None, "boom", attempt),
+                                 model_mod.MAX_SINGLE_WAIT)
+
+    def test_a_long_provider_wait_is_reported_uncapped(self):
+        """Uncapped so the caller can refuse rather than sleep pointlessly."""
+        self.assertGreater(model_mod.retry_delay({"Retry-After": "9999"}, "", 0),
+                           model_mod.MAX_SINGLE_WAIT)
 
 
 class TestErrorTranslation(HttpCase):

@@ -18,7 +18,23 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .config import Config
 
-USER_AGENT = "agit/1.0 (+https://github.com/agit-dev/agit)"
+USER_AGENT = "agit/1.0 (+https://github.com/VamsiKrishnaThota03/agit)"
+
+#: Status codes worth retrying, and how patient to be about it. Free tiers are
+#: aggressively rate limited and usually tell you exactly how long to wait, so
+#: honouring that is the difference between a run finishing and a run dying.
+RETRYABLE = (408, 409, 425, 429, 500, 502, 503, 504)
+MAX_ATTEMPTS = 6
+MAX_TOTAL_WAIT = 120.0          # seconds spent waiting, across one request
+MAX_SINGLE_WAIT = 45.0
+
+#: Providers phrase it differently; all of these appear in the wild.
+_RETRY_HINTS = (
+    r"try again in ([0-9.]+)\s*s",
+    r"retry after ([0-9.]+)\s*s",
+    r"please wait ([0-9.]+)\s*s",
+    r"in ([0-9.]+)\s*seconds",
+)
 
 
 #: Things that change between two identical runs and must not affect the
@@ -45,12 +61,78 @@ def mask_volatile(text: str) -> str:
     return text
 
 
+def retry_delay(headers: Any, body: str, attempt: int) -> float:
+    """How long the provider wants us to wait, or a backoff if it did not say.
+
+    Returned uncapped on purpose: the caller refuses outright when a provider
+    asks for longer than agit will hold a request, because sleeping 45s when
+    the answer is "come back in an hour" only wastes 45 seconds.
+    """
+    import re
+
+    if headers is not None:
+        for name in ("Retry-After", "retry-after", "X-RateLimit-Reset-Tokens",
+                     "x-ratelimit-reset-tokens"):
+            raw = None
+            try:
+                raw = headers.get(name)
+            except AttributeError:
+                raw = None
+            if raw:
+                match = re.match(r"^\s*([0-9.]+)\s*(m?s)?\s*$", str(raw))
+                if match:
+                    value = float(match.group(1))
+                    if match.group(2) == "ms":
+                        value /= 1000.0
+                    return max(0.5, value + 0.5)
+    low = (body or "").lower()
+    for pattern in _RETRY_HINTS:
+        match = re.search(pattern, low)
+        if match:
+            try:
+                return max(0.5, float(match.group(1)) + 0.5)
+            except ValueError:
+                pass
+    return min(MAX_SINGLE_WAIT, 1.5 ** attempt + 0.5)
+
+
 class ModelError(RuntimeError):
     pass
 
 
 class ReplayMiss(ModelError):
     pass
+
+
+class ToolCallRejected(ModelError):
+    """The provider refused the model's tool call, not agit's request.
+
+    Groq and others validate tool calls server-side and answer HTTP 400 with
+    code `tool_use_failed` when the model invents a malformed call. That is a
+    model mistake, recoverable by telling the model what it got wrong -- so it
+    must not kill the run the way a bad API key would.
+    """
+
+    def __init__(self, detail: str, generation: str = ""):
+        super().__init__("the model emitted a tool call the provider rejected: %s"
+                         % detail[:400])
+        self.detail = detail
+        self.generation = generation
+
+
+#: Provider markers for "your model botched the tool call".
+TOOL_REJECTION_MARKERS = (
+    "tool_use_failed",
+    "tool call validation failed",
+    "invalid tool call",
+    "did not match schema",
+    "failed_generation",
+)
+
+
+def _is_tool_rejection(detail: str) -> bool:
+    low = (detail or "").lower()
+    return any(marker in low for marker in TOOL_REJECTION_MARKERS)
 
 
 @dataclass
@@ -148,10 +230,12 @@ class ModelClient:
         cfg: Config,
         cassette: Optional[Cassette] = None,
         script: Optional[Any] = None,
+        on_retry: Optional[Any] = None,
     ):
         self.cfg = cfg
         self.cassette = cassette
         self.script = script
+        self.on_retry = on_retry        # called with a human-readable reason
         self.calls = 0
         self.tokens_in = 0
         self.tokens_out = 0
@@ -222,7 +306,9 @@ class ModelClient:
         if self.cfg.api_key:
             headers["Authorization"] = "Bearer " + self.cfg.api_key
         last_error = ""
-        for attempt in range(4):
+        waited = 0.0
+        for attempt in range(MAX_ATTEMPTS):
+            final = attempt == MAX_ATTEMPTS - 1
             request = urllib.request.Request(
                 self.cfg.endpoint(), data=body, headers=headers, method="POST"
             )
@@ -232,23 +318,38 @@ class ModelClient:
                 return json.loads(text)
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", "replace")[:600]
-                if exc.code in (408, 409, 425, 429, 500, 502, 503, 504) and attempt < 3:
-                    time.sleep(min(8.0, 1.5 ** attempt + 0.5))
-                    last_error = "HTTP %s: %s" % (exc.code, detail)
-                    continue
-                raise ModelError(_explain_http(exc.code, detail, self.cfg))
+                last_error = "HTTP %s: %s" % (exc.code, detail)
+                if exc.code == 400 and _is_tool_rejection(detail):
+                    raise ToolCallRejected(detail, _failed_generation(detail))
+                if exc.code not in RETRYABLE or final:
+                    raise ModelError(_explain_http(exc.code, detail, self.cfg))
+                delay = retry_delay(getattr(exc, "headers", None), detail, attempt)
+                if delay > MAX_SINGLE_WAIT or waited + delay > MAX_TOTAL_WAIT:
+                    raise ModelError(_explain_http(exc.code, detail, self.cfg))
+                self._notify_retry(exc.code, delay, detail)
+                waited += delay
+                time.sleep(delay)
             except urllib.error.URLError as exc:
                 last_error = str(exc.reason)
-                if attempt < 3:
-                    time.sleep(min(6.0, 1.5 ** attempt))
-                    continue
-                raise ModelError(
-                    "cannot reach %s (%s). Check the base URL, your network, or run "
-                    "`agit doctor`." % (self.cfg.endpoint(), last_error)
-                )
+                if final:
+                    raise ModelError(
+                        "cannot reach %s (%s). Check the base URL, your network, or run "
+                        "`agit doctor`." % (self.cfg.endpoint(), last_error)
+                    )
+                delay = min(6.0, 1.5 ** attempt)
+                self._notify_retry(0, delay, last_error)
+                waited += delay
+                time.sleep(delay)
             except ValueError as exc:
                 raise ModelError("provider returned a non-JSON body: %s" % exc)
         raise ModelError("request failed after retries: %s" % last_error)
+
+    def _notify_retry(self, code: int, delay: float, detail: str) -> None:
+        if self.on_retry is None:
+            return
+        reason = "rate limited" if code == 429 else (
+            "HTTP %d" % code if code else "network error")
+        self.on_retry("%s, waiting %.1fs before retry" % (reason, delay))
 
     # -- parsing ----------------------------------------------------------
     def _to_reply(self, raw: Dict[str, Any], cached: bool) -> Reply:
@@ -406,6 +507,18 @@ def parse_text_action(text: str) -> Tuple[str, Optional[ToolCall]]:
     return why, ToolCall(name=name, args=args)
 
 
+def _failed_generation(detail: str) -> str:
+    """What the model actually wrote, when the provider echoes it back."""
+    try:
+        payload = json.loads(detail)
+    except ValueError:
+        return ""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        return str(error.get("failed_generation") or "")[:1500]
+    return ""
+
+
 def _explain_http(code: int, detail: str, cfg: Config) -> str:
     if code in (401, 403):
         return ("provider rejected the credentials (HTTP %d). Check your API key for "
@@ -414,8 +527,13 @@ def _explain_http(code: int, detail: str, cfg: Config) -> str:
         return ("HTTP 404 from %s. The base URL or model name is probably wrong: base_url=%r "
                 "model=%r. %s" % (cfg.endpoint(), cfg.base_url, cfg.model, detail))
     if code == 429:
-        return "rate limited by the provider (HTTP 429) after retries. %s" % detail
+        return ("rate limited by the provider (HTTP 429), and the wait it asked for is "
+                "longer than agit will hold a single request. Try a smaller model, fewer "
+                "steps, or a paid tier. %s" % detail)
     if code == 400:
+        if _is_tool_rejection(detail):
+            return ("the model emitted a malformed tool call and the provider rejected it. "
+                    "agit normally hands this back to the model to retry. %s" % detail)
         return ("provider rejected the request (HTTP 400). If this model has no tool-calling "
                 "support, retry with --no-native-tools. %s" % detail)
     return "HTTP %d from provider: %s" % (code, detail)

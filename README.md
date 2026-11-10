@@ -6,7 +6,7 @@ Every run can be forked, rewound and replayed.</p>
 
 <p align="center">
 <a href="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml/badge.svg"></a>
-<img alt="tests" src="https://img.shields.io/badge/tests-134%20offline-3ddc97">
+<img alt="tests" src="https://img.shields.io/badge/tests-144%20offline-3ddc97">
 <img alt="dependencies" src="https://img.shields.io/badge/dependencies-0-ff9933">
 <img alt="python" src="https://img.shields.io/badge/python-3.9%2B-58a6ff">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-b48ead">
@@ -37,30 +37,27 @@ agit runs an agent, and writes the run into a **git repository of its own** at
 `.agit/ledger`. One agent step, one commit:
 
 ```
-step 0005 write_file csvkit.py
+step 0009 edit_file test_invoice.py
 
-Replace the naive split with a single-pass scanner: a comma inside quotes is
-literal data, and a doubled quote is an escaped quote. Unquoted fields keep
-the old trimming so existing callers see no change.
+I found a case: two lines with qty=3 and qty=7 at unit_price=10.005. Old code
+gives 118.06, new code gives 118.07. Now I'll add the test.
 
-Agit-Run: 1110-110903-9def
-Agit-Step: 5
+Agit-Run: 1110-190840-b334
+Agit-Step: 9
 Agit-Kind: tool
-Agit-Tool: write_file
-Agit-Target: csvkit.py
+Agit-Tool: edit_file
+Agit-Target: test_invoice.py
 Agit-Ok: true
-Agit-Model: qwen-3.8-27b
-Agit-Tokens-In: 2843
-Agit-Tokens-Out: 412
-Agit-Duration-Ms: 2210
-Agit-Added: 40
-Agit-Removed: 2
-Agit-Verify: pass
+Agit-Model: qwen/qwen3.8-27b
+Agit-Tokens-In: 3235
+Agit-Tokens-Out: 375
+Agit-Duration-Ms: 26432
+Agit-Added: 10
+Agit-Removed: 0
+Agit-Verify: -
 ```
 
-(That is a real commit message shape from a run against a hosted model; the
-offline demo below records `Agit-Model: agit-script/deterministic` instead, so
-a scripted run can never be mistaken for a model run.)
+That is a real commit from a real run — `git log` output, not an illustration.
 
 The commit *tree* holds a snapshot of your whole workspace plus the exact model
 request and response for that step. That one decision — snapshot inside the
@@ -232,6 +229,48 @@ step with its rationale, every diff, every tool result, the verify output, the
 raw model I/O, and the ledger graph. The thing you hand a reviewer, an auditor,
 or your future self.
 
+## Tested against a live model
+
+Everything above also runs on a real model, not just the offline planner. The
+shakedown: **qwen3.8-27b on Groq's free tier**, pointed at a money-rounding bug
+in an invoice module it had never seen, gated on `python3 -m unittest`.
+
+```console
+$ agit blame invoice.py
+  human       9 │ def invoice_total(lines, gst_pct=18):
+  human      13 │     """
+  step 03    14 │     # Round each line to 2 decimals first so the grand total matches the
+  step 03    15 │     # per-line amounts a customer sees, instead of drifting by a paisa.
+  step 03    16 │     subtotal = sum(round(line_total(**line), 2) for line in lines)
+  human      17 │     return round(subtotal * (1 + gst_pct / 100), 2)
+
+$ agit stats --json | jq '{verified, steps, agent_share, model}'
+{ "verified": true, "steps": 21, "agent_share": 28.9, "model": "qwen/qwen3.8-27b" }
+```
+
+The agent wrote a failing test first, fixed the rounding, and the suite went
+green — and the test genuinely fails on the old code, checked by hand rather
+than taken on the model's word.
+
+Running it for real found three bugs that the scripted provider could never
+have exposed, all now fixed and covered by tests:
+
+1. **Rate limits were fought, not obeyed.** Free tiers answer 429 with the exact
+   wait they want ("try again in 9.44s"); agit used blind exponential backoff
+   and gave up. It now honours `Retry-After` and the wait named in the error
+   body, reports it (`! rate limited, waiting 24.5s before retry`), and refuses
+   outright when a provider asks for longer than it will hold a request.
+2. **A multi-line shell command corrupted the commit trailers.** A git trailer
+   is one line; `Agit-Target:` holding a heredoc broke every trailer after it.
+   Values are now flattened for the trailer, with the full text kept in the
+   step's `meta.json`.
+3. **A malformed tool call killed the run.** Providers validate tool calls and
+   answer HTTP 400 — a *model* mistake that agit treated like a bad API key.
+   It now records the rejection as a step, replies with the schema of the tool
+   the model botched, and after two failures offers the plain-JSON protocol as
+   a fallback. That is what let this run reach VERIFIED: the model could do the
+   work but kept mis-emitting `finish`.
+
 ## The verify gate
 
 `finish` is a claim, not a fact. Give agit a definition of done and the claim
@@ -376,6 +415,10 @@ Honesty is cheaper than a disappointed issue:
 - It is **not a model**. Its reasoning is whatever model you point it at. The
   bundled `script` provider is a deterministic planner for demos and tests, and
   never pretends to be a model (`Agit-Model: agit-script/deterministic`).
+- **Only one live model has been shaken out** so far (qwen3.8-27b via Groq).
+  Other models will have their own tool-calling quirks; the rejection-recovery
+  path above exists precisely because of that, but expect rough edges and
+  please open an issue.
 - **Snapshots are whole-workspace**, which suits projects up to a few thousand
   text files. Files over 512 KB and binaries are skipped and listed in
   `.agit-skipped`.
@@ -385,7 +428,7 @@ Honesty is cheaper than a disappointed issue:
 
 ## Tests
 
-134 tests, standard library only, no network, no API key:
+144 tests, standard library only, no network, no API key:
 
 ```bash
 python3 -m unittest discover -s tests -t .

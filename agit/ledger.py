@@ -304,7 +304,7 @@ class Ledger:
             ("Agit-Verify", (meta.get("verify") or {}).get("state", "") if isinstance(meta.get("verify"), dict) else str(meta.get("verify") or "")),
         ]
         message = subject + ("\n\n" + body if body else "") + "\n\n" + "\n".join(
-            "%s: %s" % (k, v if v != "" else "-") for k, v in trailers
+            "%s: %s" % (k, _trailer_value(v)) for k, v in trailers
         )
         try:
             self._git("commit", "-q", "--allow-empty", "-m", message)
@@ -461,6 +461,25 @@ class Ledger:
         return self._git(
             "log", "--graph", "--all", "--decorate", "--oneline", "--date-order"
         )
+
+
+TRAILER_LIMIT = 200
+
+
+def _trailer_value(value: Any) -> str:
+    """Flatten a value so it cannot break the trailer block.
+
+    A git trailer is one line. A model that runs a multi-line shell command
+    would otherwise write newlines into `Agit-Target:` and every trailer after
+    it would be unparseable. The full, unflattened value is always in the
+    step's meta.json, which is JSON and has no such limitation.
+    """
+    text = " ".join(str(value).split())
+    if not text:
+        return "-"
+    if len(text) > TRAILER_LIMIT:
+        return text[:TRAILER_LIMIT - 3] + "..."
+    return text
 
 
 def _int(value: Optional[str]) -> int:

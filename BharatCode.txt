@@ -74,7 +74,7 @@ BUILD, TEST, SIZE
 -----------------
   Language:      Python 3.9+
   Dependencies:  none (standard library and git only)
-  Tests:         python3 -m unittest discover -s tests -t .   (134 tests, offline)
+  Tests:         python3 -m unittest discover -s tests -t .   (144 tests, offline)
   CI:            GitHub Actions, Linux and macOS, Python 3.9-3.13
 
 
@@ -98,6 +98,22 @@ WHAT WAS BUILT HERE, SPECIFICALLY
   * a static-file UI (agit dashboard) that reads the ledger and renders runs,
     fork lineage, clickable per-line blame with the reasoning, and token spend
     -- deep-linkable, with no server listening anywhere
+
+
+TESTED AGAINST A LIVE MODEL
+---------------------------
+Beyond the offline suite, agit has been run end to end against a hosted model
+(qwen3.8-27b on Groq's free tier) on a money-rounding bug it had never seen,
+gated on a real unittest command, ending VERIFIED in 21 steps. The agent's fix
+and the test it wrote were then checked by hand: the new test does fail on the
+old code.
+
+That live run exposed three bugs the offline planner could never have shown,
+all now fixed and covered by tests: rate-limit waits are taken from the
+provider's own Retry-After instead of blind backoff; multi-line shell commands
+no longer corrupt the one-line git trailers; and a tool call the provider
+rejects as malformed is handed back to the model with the schema it got wrong
+(plus a plain-JSON fallback) rather than killing the run.
 
 
 NO SECRETS, TOKENS, PRIVATE LINKS OR PRIVATE USER DATA ARE PRESENT IN THIS
