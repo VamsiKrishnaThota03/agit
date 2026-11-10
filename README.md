@@ -5,7 +5,8 @@ Every step the agent takes is a commit. Every line it writes is blamable.<br>
 Every run can be forked, rewound and replayed.</p>
 
 <p align="center">
-<img alt="tests" src="https://img.shields.io/badge/tests-86%20passing-3ddc97">
+<a href="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml/badge.svg"></a>
+<img alt="tests" src="https://img.shields.io/badge/tests-86%20offline-3ddc97">
 <img alt="dependencies" src="https://img.shields.io/badge/dependencies-0-ff9933">
 <img alt="python" src="https://img.shields.io/badge/python-3.9%2B-58a6ff">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-b48ead">
