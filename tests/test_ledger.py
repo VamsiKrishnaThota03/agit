@@ -55,6 +55,14 @@ class TestLedgerBasics(WorkspaceCase):
         with self.assertRaises(LedgerError):
             led.resolve_run("nope-nope")
 
+    def test_prefix_match_prefers_ids_over_labels(self):
+        """A replay's label contains its parent's id; that must not make the
+        parent id ambiguous."""
+        parent = self.run_agent(FIX_STEPS, label="demo")
+        self.run_agent(FIX_STEPS, label="replay-of-" + parent.run)
+        resolved = self.ledger.resolve_run(parent.run[:11])
+        self.assertEqual(resolved.run, parent.run)
+
     def test_step_artifacts_hold_the_model_io(self):
         result = self.run_agent(FIX_STEPS)
         step = next(s for s in self.ledger.steps(result.branch) if s.tool == "edit_file")

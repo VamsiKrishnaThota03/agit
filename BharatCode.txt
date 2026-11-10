@@ -70,7 +70,7 @@ BUILD, TEST, SIZE
 -----------------
   Language:      Python 3.9+
   Dependencies:  none (standard library and git only)
-  Tests:         python3 -m unittest discover -s tests -t .   (86 tests, offline)
+  Tests:         python3 -m unittest discover -s tests -t .   (87 tests, offline)
   CI:            GitHub Actions, Linux and macOS, Python 3.9-3.13
 
 

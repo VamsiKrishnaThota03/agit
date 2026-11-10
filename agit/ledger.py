@@ -245,7 +245,12 @@ class Ledger:
         for info in runs:
             if spec in (info.run, info.branch, RUN_PREFIX + info.run):
                 return info
-        matches = [i for i in runs if i.run.startswith(spec) or spec in i.label]
+        # Prefix match on the id first. Label matching is a deliberate fallback:
+        # a replay or fork carries its parent's id inside its own label, so
+        # searching labels eagerly makes every parent id ambiguous.
+        matches = [i for i in runs if i.run.startswith(spec)]
+        if not matches:
+            matches = [i for i in runs if spec in i.label]
         if len(matches) == 1:
             return matches[0]
         if not matches:
