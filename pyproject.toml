@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agit"
+version = "1.0.0"
+description = "git for AI agents: every agent step is a commit, every AI-written line is blamable, every run is forkable and replayable."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Vamsi Krishna Thota" }]
+keywords = ["ai", "agent", "git", "llm", "coding-agent", "audit", "provenance", "blame", "replay"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Version Control :: Git",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/VamsiKrishnaThota03/agit"
+Issues = "https://github.com/VamsiKrishnaThota03/agit/issues"
+
+[project.scripts]
+agit = "agit.cli:main"
+
+[tool.setuptools]
+packages = ["agit"]
+
+[tool.setuptools.package-data]
+agit = ["demo/script.json", "demo/script-stdlib.json", "demo/workspace/*", "demo/fixed/*"]

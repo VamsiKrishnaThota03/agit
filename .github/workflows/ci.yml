@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: no dependencies to install
+        run: python -c "import sys; print(sys.version)"
+
+      - name: unit tests
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: offline demo runs end to end
+        run: python -m agit demo /tmp/agit-ci-demo --fast --force
+
+      - name: replay is byte-identical
+        working-directory: /tmp/agit-ci-demo
+        run: python -m agit replay @last
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: blame attributes the fix to a step
+        working-directory: /tmp/agit-ci-demo
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m agit blame csvkit.py | tee blame.txt
+          grep -q "step 05" blame.txt
+          grep -q "human" blame.txt
+
+      - name: html report is produced
+        working-directory: /tmp/agit-ci-demo
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m agit report @last -o run.html
+          test -s run.html
+
+      - name: upload the run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agit-run-report-${{ matrix.os }}-py${{ matrix.python }}
+          path: /tmp/agit-ci-demo/run.html
+          if-no-files-found: ignore
+
+  package:
+    name: builds and installs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - run: pip install dist/*.whl
+      - run: agit --version && agit doctor
+      - run: cd /tmp && agit demo ci-install-demo --fast

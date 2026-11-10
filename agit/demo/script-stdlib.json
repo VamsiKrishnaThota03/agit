@@ -1,0 +1,29 @@
+{
+  "name": "quote-aware csv parser (stdlib csv module)",
+  "note": "The alternate branch for `agit fork`. Same failing test, different solution, so `agit diff` has something real to compare.",
+  "steps": [
+    {
+      "why": "Re-read the parser at the fork point: the failing test exists, the fix does not.",
+      "tool": "read_file",
+      "args": {"path": "csvkit.py"}
+    },
+    {
+      "why": "Hand-rolling a quote scanner means owning every edge case forever. The standard library already implements RFC 4180, so delegate and keep the trimming behaviour callers rely on.",
+      "tool": "write_file",
+      "args": {"path": "csvkit.py"},
+      "content_file": "fixed/csvkit_stdlib.py"
+    },
+    {
+      "why": "Prove the delegated implementation satisfies both the new and the old tests.",
+      "tool": "run_command",
+      "args": {"command": "python3 -m unittest discover -q -p \"test_*.py\" ."}
+    },
+    {
+      "why": "Suite is green with a third of the code, so stop here.",
+      "tool": "finish",
+      "args": {
+        "summary": "Replaced the naive split with csv.reader instead of a hand-written scanner: ~35 fewer lines to maintain and RFC 4180 edge cases come for free. Trade-off: csv.reader allocates a reader per line, so the hand-rolled scanner is faster on very hot paths. Same four quoted-field tests pass."
+      }
+    }
+  ]
+}

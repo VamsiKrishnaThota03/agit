@@ -1,0 +1,95 @@
+agit — git for AI agents
+========================
+
+BharatCode Build League submission
+Builder:  Vamsi Krishna Thota  (GitHub: @VamsiKrishnaThota03)
+Repo:     https://github.com/VamsiKrishnaThota03/agit
+License:  MIT
+Built:    November 2026
+
+
+WHAT IT IS
+----------
+agit is a harness: it puts a model, a prompt, a toolset and a workflow together
+to solve a real problem. The problem is not "can an AI write code" — plenty of
+tools do that. The problem is that once an agent has written the code, nobody
+can audit it. The chat scrolls away, the reasoning is never stored next to the
+line it produced, and the run cannot be resumed, compared or re-examined.
+
+agit runs the agent and writes the entire run into a git repository of its own
+at .agit/ledger. One agent step is one commit: the rationale becomes the commit
+message, the workspace snapshot becomes the commit tree, and the exact model
+request and response are stored as files inside that commit.
+
+Because the snapshot lives in the commit, ordinary git gives you things no
+agent transcript can:
+
+  agit blame <file>        which agent step wrote each line, human lines marked
+  agit why <file> <line>   the rationale, model, tool and prompt behind one line
+  agit fork <step> "..."   rewind to a step, try another approach on a branch
+  agit diff <runA> <runB>  compare two solutions the agent produced
+  agit goto / agit undo    move the workspace back in time, losing nothing
+  agit replay [--live]     re-drive a run from cache for free, or detect
+                           where today's model answer diverges from the record
+  agit report              one self-contained HTML audit trail for a PR
+  agit run --verify "..."  a definition of done the agent cannot talk past
+
+
+HOW IT USES THE BHARATCODE MODEL API
+------------------------------------
+Every reasoning step is a BharatCode model call. agit speaks the OpenAI-shaped
+chat-completions protocol and reads its configuration from the environment, so
+no key or URL is ever committed:
+
+  export BHARATCODE_BASE_URL="https://<base from your BharatCode API page>/v1"
+  export BHARATCODE_API_KEY="<your key>"
+  export BHARATCODE_MODEL="qwen-3.8-27b"
+  agit doctor --ping
+  agit run "add retry with backoff to fetch()" --verify "pytest -q"
+
+Native tool calling is used when the model supports it, with a JSON-object
+fallback protocol (--no-native-tools) for models that do not. The same binary
+also works against Ollama, Groq, OpenRouter, Gemini or any other
+OpenAI-compatible endpoint, because locking a provenance tool to one vendor
+would defeat the point.
+
+
+RUN IT WITHOUT ANY KEY
+----------------------
+  git clone https://github.com/VamsiKrishnaThota03/agit && cd agit
+  python3 -m agit demo
+
+The demo ships a small CSV parser with a real bug, a definition of done, and a
+bundled deterministic planner, so judges and voters can see the whole feature
+set offline, in about twenty seconds, at zero cost. The planner is clearly
+labelled as a script (Agit-Model: agit-script/deterministic) and never pretends
+to be a model.
+
+
+BUILD, TEST, SIZE
+-----------------
+  Language:      Python 3.9+
+  Dependencies:  none (standard library and git only)
+  Tests:         python3 -m unittest discover -s tests -t .   (86 tests, offline)
+  CI:            GitHub Actions, Linux and macOS, Python 3.9-3.13
+
+
+WHAT WAS BUILT HERE, SPECIFICALLY
+---------------------------------
+  * a git-backed agent ledger with structured commit trailers per step
+  * per-line provenance for AI-written code on top of real `git blame`
+  * forkable agent runs as git branches, with cross-run workspace diffs
+  * record/replay cassettes with a volatility mask, giving byte-identical
+    reproduction of a run in a different directory on a different machine
+  * a verify gate that turns "done" from a claim into a tested fact, with a
+    non-zero exit code for CI
+  * a safety layer: workspace-confined writes, per-command approval, a hard
+    denylist of irreversible and outward-facing commands, and scrubbing of
+    local paths out of everything sent to the model
+  * an offline deterministic provider so the demo and the whole test suite run
+    with no API key and no network
+
+
+NO SECRETS, TOKENS, PRIVATE LINKS OR PRIVATE USER DATA ARE PRESENT IN THIS
+REPOSITORY. agit sends no telemetry and makes no network call other than the
+model request you configure.

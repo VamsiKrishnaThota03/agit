@@ -1,0 +1,25 @@
+# agit's own ledger, when agit is used on itself
+.agit/
+
+# demo and replay scratch
+agit-demo/
+agit-run-*.html
+run.html
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# editors and os
+.DS_Store
+.idea/
+.vscode/

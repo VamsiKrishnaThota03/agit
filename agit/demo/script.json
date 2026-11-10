@@ -1,0 +1,45 @@
+{
+  "name": "quote-aware csv parser (hand-rolled scanner)",
+  "note": "Deterministic plan used by `agit demo`. No model, no network: this file IS the planner.",
+  "steps": [
+    {
+      "why": "Orient myself in the workspace before touching anything.",
+      "tool": "list_dir",
+      "args": {"path": ".", "depth": 2}
+    },
+    {
+      "why": "Read the parser so the fix is based on what the code actually does, not what the name suggests.",
+      "tool": "read_file",
+      "args": {"path": "csvkit.py"}
+    },
+    {
+      "why": "Pin the bug with a failing test first, so the fix is provable rather than plausible.",
+      "tool": "write_file",
+      "args": {"path": "test_quoted.py"},
+      "content_file": "fixed/test_quoted.py"
+    },
+    {
+      "why": "Confirm the new test fails for the stated reason before changing any logic.",
+      "tool": "run_command",
+      "args": {"command": "python3 -m unittest -q test_quoted"}
+    },
+    {
+      "why": "Replace the naive split with a single-pass scanner: a comma inside quotes is literal data, and a doubled quote is an escaped quote. Unquoted fields keep the old trimming so existing callers see no change.",
+      "tool": "write_file",
+      "args": {"path": "csvkit.py"},
+      "content_file": "fixed/csvkit.py"
+    },
+    {
+      "why": "Run the whole suite, not just the new test, to prove the old behaviour still holds.",
+      "tool": "run_command",
+      "args": {"command": "python3 -m unittest discover -q -p \"test_*.py\" ."}
+    },
+    {
+      "why": "Both the new and the old tests pass, so the task is done.",
+      "tool": "finish",
+      "args": {
+        "summary": "parse_row now scans the line once, tracking quote state, so commas inside quoted fields stay in one field and \"\" is read as a literal quote. Added test_quoted.py with four cases (quoted comma, quote stripping, escaped quote, whole-document parse). Unquoted fields are still trimmed, so test_csvkit.py passes unchanged."
+      }
+    }
+  ]
+}
