@@ -5,6 +5,12 @@
 agit-demo/
 agit-run-*.html
 run.html
+dash.html
+dashboard.html
+
+# regenerated demo-video artefacts (the mp4 and scripts ARE committed)
+demo/frames/
+demo/stage/
 
 # python
 __pycache__/

@@ -1,0 +1,64 @@
+1
+00:00:00,000 --> 00:00:10,400
+An AI wrote this line. Why? Nobody can answer that today.
+
+2
+00:00:10,400 --> 00:00:22,800
+agit writes every agent step into a git ledger: one step, one
+commit.
+
+3
+00:00:22,800 --> 00:00:41,050
+The agent writes a failing test first, then the fix — and each
+step is a commit.
+
+4
+00:00:41,050 --> 00:00:53,850
+VERIFIED is not the model's opinion — agit ran your tests
+before believing it.
+
+5
+00:00:53,850 --> 00:01:04,650
+Human lines and agent lines, separated line by line.
+
+6
+00:01:04,650 --> 00:01:18,650
+Point at any line and ask why. The answer was stored when the
+line was written.
+
+7
+00:01:18,650 --> 00:01:30,650
+Rewind to step 4 and try a different approach. The ledger
+branches like git.
+
+8
+00:01:30,650 --> 00:01:40,650
+Two verified solutions to the same task, side by side.
+
+9
+00:01:40,650 --> 00:01:50,650
+Diff the outcomes, then keep the one you prefer.
+
+10
+00:01:50,650 --> 00:02:04,250
+Every model call is recorded, so a run replays
+byte-identically — for free.
+
+11
+00:02:04,250 --> 00:02:19,050
+The dashboard: every run, every step, every reason — one
+static HTML file.
+
+12
+00:02:19,050 --> 00:02:33,450
+Click any line: the step and the reasoning pin to the top.
+
+13
+00:02:33,450 --> 00:02:42,450
+And where the tokens actually went, step by step.
+
+14
+00:02:42,450 --> 00:02:54,050
+Zero dependencies, 97 offline tests, and a demo that needs no
+API key.
+

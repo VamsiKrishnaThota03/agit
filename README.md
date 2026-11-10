@@ -6,13 +6,17 @@ Every run can be forked, rewound and replayed.</p>
 
 <p align="center">
 <a href="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/VamsiKrishnaThota03/agit/actions/workflows/ci.yml/badge.svg"></a>
-<img alt="tests" src="https://img.shields.io/badge/tests-97%20offline-3ddc97">
+<img alt="tests" src="https://img.shields.io/badge/tests-103%20offline-3ddc97">
 <img alt="dependencies" src="https://img.shields.io/badge/dependencies-0-ff9933">
 <img alt="python" src="https://img.shields.io/badge/python-3.9%2B-58a6ff">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-b48ead">
 </p>
 
 <p align="center"><img alt="agit demo" src="docs/demo.svg" width="860"></p>
+
+<p align="center"><a href="demo/agit-demo.mp4"><b>▶ watch the 3-minute demo</b></a> &nbsp;·&nbsp;
+<a href="demo/README.md">narration script</a> &nbsp;·&nbsp;
+<a href="#20-seconds-no-api-key">run it yourself in 20 seconds</a></p>
 
 ---
 
@@ -366,7 +370,7 @@ Honesty is cheaper than a disappointed issue:
 
 ## Tests
 
-97 tests, standard library only, no network, no API key:
+103 tests, standard library only, no network, no API key:
 
 ```bash
 python3 -m unittest discover -s tests -t .

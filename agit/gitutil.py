@@ -64,9 +64,25 @@ def is_repo(path: str) -> bool:
         return False
 
 
+def toplevel(path: str) -> Optional[str]:
+    try:
+        return os.path.realpath(git(path, "rev-parse", "--show-toplevel").strip())
+    except (GitError, OSError):
+        return None
+
+
 def tracked_and_untracked(path: str) -> Optional[List[str]]:
-    """Files git would show, honouring .gitignore. None when `path` is not a repo."""
+    """Files git would show, honouring .gitignore.
+
+    Returns None unless `path` is itself the root of a repository. A workspace
+    that merely sits *inside* someone else's repository must not inherit that
+    repository's ignore rules: a parent .gitignore line like `scratch/` would
+    otherwise make every file in the workspace invisible to agit.
+    """
     if not is_repo(path):
+        return None
+    top = toplevel(path)
+    if top is None or top != os.path.realpath(path):
         return None
     try:
         out = git(path, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
